@@ -1,4 +1,4 @@
-"""Simplified experiment runner ported from legacy implementation."""
+"""SDA (Sense/Decide/Act) runner executing one complete orchestration cycle."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from dmp.core.interfaces import LLMClientProtocol, ResultSink
 from dmp.core.processing import prepare_prompt_context
 from dmp.core.prompts import PromptEngine, PromptTemplate, PromptRenderingError, PromptValidationError
 from dmp.core.llm.middleware import LLMMiddleware, LLMRequest
-from dmp.core.sda.plugins import RowExperimentPlugin, AggregationExperimentPlugin, EarlyStopPlugin
-from dmp.core.sda.plugin_registry import create_early_stop_plugin
+from dmp.core.sda.plugins import TransformPlugin, AggregationTransform, HaltConditionPlugin
+from dmp.core.sda.plugin_registry import create_halt_condition_plugin
 from dmp.core.controls import RateLimiter, CostTracker
 from dmp.core.security import normalize_security_level, resolve_security_level
 from dmp.core.artifact_pipeline import ArtifactPipeline, SinkBinding
@@ -29,18 +29,18 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class ExperimentRunner:
+class SDARunner:
     llm_client: LLMClientProtocol
     sinks: List[ResultSink]
     prompt_system: str
     prompt_template: str
     prompt_fields: List[str] | None = None
     criteria: List[Dict[str, str]] | None = None
-    row_plugins: List[RowExperimentPlugin] | None = None
-    aggregator_plugins: List[AggregationExperimentPlugin] | None = None
+    transform_plugins: List[TransformPlugin] | None = None
+    aggregation_transforms: List[AggregationTransform] | None = None
     rate_limiter: RateLimiter | None = None
     cost_tracker: CostTracker | None = None
-    experiment_name: str | None = None
+    cycle_name: str | None = None
     retry_config: Dict[str, Any] | None = None
     checkpoint_config: Dict[str, Any] | None = None
     _checkpoint_ids: set[str] | None = None
@@ -53,11 +53,11 @@ class ExperimentRunner:
     concurrency_config: Dict[str, Any] | None = None
     security_level: str | None = None
     _active_security_level: str | None = None
-    early_stop_plugins: List[EarlyStopPlugin] | None = None
-    early_stop_config: Dict[str, Any] | None = None
+    halt_condition_plugins: List[HaltConditionPlugin] | None = None
+    halt_condition_config: Dict[str, Any] | None = None
 
     def run(self, df: pd.DataFrame) -> Dict[str, Any]:
-        self._init_early_stop()
+        self._init_halt_conditions()
         processed_ids: set[str] | None = None
         checkpoint_field = None
         checkpoint_path = None
@@ -66,16 +66,16 @@ class ExperimentRunner:
             checkpoint_field = self.checkpoint_config.get("field", "APPID")
             processed_ids = self._load_checkpoint(checkpoint_path)
 
-        row_plugins = self.row_plugins or []
+        transform_plugins = self.transform_plugins or []
         engine = self.prompt_engine or PromptEngine()
         system_template = engine.compile(
             self.prompt_system or "",
-            name=f"{self.experiment_name or 'experiment'}:system",
+            name=f"{self.cycle_name or 'experiment'}:system",
             defaults=self.prompt_defaults or {},
         )
         user_template = engine.compile(
             self.prompt_template or "",
-            name=f"{self.experiment_name or 'experiment'}:user",
+            name=f"{self.cycle_name or 'experiment'}:user",
             defaults=self.prompt_defaults or {},
         )
         criteria_templates: Dict[str, PromptTemplate] = {}
@@ -87,7 +87,7 @@ class ExperimentRunner:
                 defaults.update(crit.get("defaults", {}))
                 criteria_templates[crit_name] = engine.compile(
                     template_text,
-                    name=f"{self.experiment_name or 'experiment'}:criteria:{crit_name}",
+                    name=f"{self.cycle_name or 'experiment'}:criteria:{crit_name}",
                     defaults=defaults,
                 )
         self._compiled_system_prompt = system_template
@@ -126,7 +126,7 @@ class ExperimentRunner:
                 system_template,
                 user_template,
                 criteria_templates,
-                row_plugins,
+                transform_plugins,
                 handle_success,
                 handle_failure,
                 concurrency_cfg,
@@ -140,7 +140,7 @@ class ExperimentRunner:
                     system_template,
                     user_template,
                     criteria_templates,
-                    row_plugins,
+                    transform_plugins,
                     context,
                     row,
                     row_id,
@@ -157,7 +157,7 @@ class ExperimentRunner:
         if failures:
             payload["failures"] = failures
         aggregates = {}
-        for plugin in self.aggregator_plugins or []:
+        for plugin in self.aggregation_transforms or []:
             derived = plugin.finalize(results)
             if derived:
                 aggregates[plugin.name] = derived
@@ -214,15 +214,15 @@ class ExperimentRunner:
         self._active_security_level = None
         return payload
 
-    def _init_early_stop(self) -> None:
+    def _init_halt_conditions(self) -> None:
         self._early_stop_reason = None
         plugins: List[EarlyStopPlugin] = []
 
-        if self.early_stop_plugins:
-            plugins = list(self.early_stop_plugins)
-        elif self.early_stop_config:
-            definition = {"name": "threshold", "options": dict(self.early_stop_config)}
-            plugin = create_early_stop_plugin(definition)
+        if self.halt_condition_plugins:
+            plugins = list(self.halt_condition_plugins)
+        elif self.halt_condition_config:
+            definition = {"name": "threshold", "options": dict(self.halt_condition_config)}
+            plugin = create_halt_condition_plugin(definition)
             plugins = [plugin]
 
         if plugins:
@@ -231,11 +231,11 @@ class ExperimentRunner:
                     plugin.reset()
                 except AttributeError:
                     pass
-            self._active_early_stop_plugins = plugins
+            self._active_halt_condition_plugins = plugins
             self._early_stop_event = threading.Event()
             self._early_stop_lock = threading.Lock()
         else:
-            self._active_early_stop_plugins = []
+            self._active_halt_condition_plugins = []
             self._early_stop_event = None
             self._early_stop_lock = None
 
@@ -243,7 +243,7 @@ class ExperimentRunner:
         event: threading.Event | None = getattr(self, "_early_stop_event", None)
         if not event or event.is_set():
             return
-        plugins: List[EarlyStopPlugin] = getattr(self, "_active_early_stop_plugins", []) or []
+        plugins: List[EarlyStopPlugin] = getattr(self, "_active_halt_condition_plugins", []) or []
         if not plugins or getattr(self, "_early_stop_reason", None):
             return
 
@@ -293,7 +293,7 @@ class ExperimentRunner:
         system_template: PromptTemplate,
         user_template: PromptTemplate,
         criteria_templates: Dict[str, PromptTemplate],
-        row_plugins: List[RowExperimentPlugin],
+        transform_plugins: List[RowExperimentPlugin],
         context: Dict[str, Any],
         row: pd.Series,
         row_id: str | None,
@@ -336,7 +336,7 @@ class ExperimentRunner:
             if retry_meta:
                 record["retry"] = retry_meta
 
-            for plugin in row_plugins:
+            for plugin in transform_plugins:
                 derived = plugin.process_row(record["row"], record.get("responses") or {"default": record["response"]})
                 if derived:
                     record.setdefault("metrics", {}).update(derived)
@@ -380,7 +380,7 @@ class ExperimentRunner:
         system_template: PromptTemplate,
         user_template: PromptTemplate,
         criteria_templates: Dict[str, PromptTemplate],
-        row_plugins: List[RowExperimentPlugin],
+        transform_plugins: List[RowExperimentPlugin],
         handle_success,
         handle_failure,
         config: Dict[str, Any],
@@ -400,7 +400,7 @@ class ExperimentRunner:
                 system_template,
                 user_template,
                 criteria_templates,
-                row_plugins,
+                transform_plugins,
                 context,
                 row,
                 row_id,
@@ -473,7 +473,7 @@ class ExperimentRunner:
                     request = middleware.before_request(request)
 
                 if self.rate_limiter:
-                    acquire_context = self.rate_limiter.acquire({"experiment": self.experiment_name, **request.metadata})
+                    acquire_context = self.rate_limiter.acquire({"experiment": self.cycle_name, **request.metadata})
                 else:
                     acquire_context = None
 
@@ -494,7 +494,7 @@ class ExperimentRunner:
                 for middleware in reversed(self.llm_middlewares or []):
                     response = middleware.after_response(request, response)
                 if self.cost_tracker:
-                    cost_metrics = self.cost_tracker.record(response, {"experiment": self.experiment_name, **request.metadata})
+                    cost_metrics = self.cost_tracker.record(response, {"experiment": self.cycle_name, **request.metadata})
                     if cost_metrics:
                         response.setdefault("metrics", {}).update(cost_metrics)
                 attempt_record = {
@@ -545,7 +545,7 @@ class ExperimentRunner:
 
     def _notify_retry_exhausted(self, request: LLMRequest, error: Exception, history: List[Dict[str, Any]]) -> None:
         metadata = {
-            "experiment": self.experiment_name,
+            "experiment": self.cycle_name,
             "attempts": getattr(error, "_dmp_retry_attempts", len(history)),
             "max_attempts": getattr(error, "_dmp_retry_max_attempts", len(history)),
             "error": str(error),
@@ -554,7 +554,7 @@ class ExperimentRunner:
         }
         logger.warning(
             "LLM request exhausted retries for experiment '%s' after %s attempts: %s",
-            self.experiment_name,
+            self.cycle_name,
             metadata["attempts"],
             metadata["error"],
         )

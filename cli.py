@@ -16,8 +16,8 @@ from typing import Iterable, Any, Dict, Mapping
 import pandas as pd
 
 from dmp.config import load_settings
-from dmp.core.orchestrator import ExperimentOrchestrator
-from dmp.core.sda import ExperimentSuiteRunner, ExperimentSuite
+from dmp.core.orchestrator import SDAOrchestrator, SDAConfig
+from dmp.core.sda import SDASuiteRunner, SDASuite
 from dmp.plugins.outputs.csv_file import CsvResultSink
 from dmp.core.controls import create_rate_limiter, create_cost_tracker
 from dmp.core.validation import validate_settings, validate_suite
@@ -157,7 +157,7 @@ def run(args: argparse.Namespace) -> None:
 
 def _run_single(args: argparse.Namespace, settings) -> None:
     logger.info("Running single experiment")
-    orchestrator = ExperimentOrchestrator(
+    orchestrator = SDAOrchestrator(
         datasource=settings.datasource,
         llm_client=settings.llm,
         sinks=settings.sinks,
@@ -203,9 +203,9 @@ def _clone_suite_sinks(base_sinks: list, experiment_name: str) -> list:
 
 def _run_suite(args: argparse.Namespace, settings, suite_root: Path, *, preflight: dict | None = None) -> None:
     logger.info("Running suite at %s", suite_root)
-    suite = ExperimentSuite.load(suite_root)
+    suite = SDASuite.load(suite_root)
     df = settings.datasource.load()
-    suite_runner = ExperimentSuiteRunner(
+    suite_runner = SDASuiteRunner(
         suite=suite,
         llm_client=settings.llm,
         sinks=settings.sinks,

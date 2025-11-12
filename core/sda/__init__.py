@@ -1,12 +1,12 @@
-"""Experiment orchestration primitives."""
+"""SDA orchestration primitives."""
 
-from .config import ExperimentConfig, ExperimentSuite
-from .runner import ExperimentRunner
-from .suite_runner import ExperimentSuiteRunner
+from .config import SDACycleConfig, SDASuite
+from .runner import SDARunner
+from .suite_runner import SDASuiteRunner
 
 __all__ = [
-    "ExperimentConfig",
-    "ExperimentSuite",
-    "ExperimentRunner",
-    "ExperimentSuiteRunner",
+    "SDACycleConfig",
+    "SDASuite",
+    "SDARunner",
+    "SDASuiteRunner",
 ]

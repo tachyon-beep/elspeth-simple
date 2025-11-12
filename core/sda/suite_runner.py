@@ -1,4 +1,4 @@
-"""Suite runner orchestrating multiple experiments."""
+"""Suite runner orchestrating multiple SDA cycles."""
 
 from __future__ import annotations
 
@@ -7,14 +7,14 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Callable
 
-from dmp.core.sda.config import ExperimentSuite, ExperimentConfig
-from dmp.core.sda.runner import ExperimentRunner
+from dmp.core.sda.config import SDASuite, SDACycleConfig
+from dmp.core.sda.runner import SDARunner
 from dmp.core.sda.plugin_registry import (
-    create_row_plugin,
-    create_aggregation_plugin,
+    create_transform_plugin,
+    create_aggregation_transform,
     create_baseline_plugin,
-    create_early_stop_plugin,
-    normalize_early_stop_definitions,
+    create_halt_condition_plugin,
+    normalize_halt_condition_definitions,
 )
 from dmp.core.interfaces import LLMClientProtocol, ResultSink
 from dmp.core.controls import create_rate_limiter, create_cost_tracker
@@ -25,18 +25,18 @@ from dmp.core.validation import ConfigurationError
 
 
 @dataclass
-class ExperimentSuiteRunner:
-    suite: ExperimentSuite
+class SDASuiteRunner:
+    suite: SDASuite
     llm_client: LLMClientProtocol
     sinks: List[ResultSink]
     _shared_middlewares: Dict[str, Any] = field(default_factory=dict, init=False)
 
     def build_runner(
         self,
-        config: ExperimentConfig,
+        config: SDACycleConfig,
         defaults: Dict[str, Any],
         sinks: List[ResultSink],
-    ) -> ExperimentRunner:
+    ) -> SDARunner:
         prompt_packs = defaults.get("prompt_packs", {})
         pack_name = config.prompt_pack or defaults.get("prompt_pack")
         pack = prompt_packs.get(pack_name) if pack_name else None
@@ -77,29 +77,29 @@ class ExperimentSuiteRunner:
         if not concurrency_config:
             concurrency_config = None
 
-        early_stop_plugin_defs: List[Dict[str, Any]] = []
+        halt_condition_plugin_defs: List[Dict[str, Any]] = []
         for source in (
-            defaults.get("early_stop_plugin_defs") or defaults.get("early_stop_plugins"),
-            pack.get("early_stop_plugins") if pack else None,
-            config.early_stop_plugin_defs,
+            defaults.get("halt_condition_plugin_defs") or defaults.get("halt_condition_plugins"),
+            pack.get("halt_condition_plugins") if pack else None,
+            config.halt_condition_plugin_defs,
         ):
             if source:
-                early_stop_plugin_defs.extend(normalize_early_stop_definitions(source))
+                halt_condition_plugin_defs.extend(normalize_halt_condition_definitions(source))
 
-        early_stop_config: Dict[str, Any] = {}
+        halt_condition_config: Dict[str, Any] = {}
         for source in (
-            defaults.get("early_stop_config") or defaults.get("early_stop"),
+            defaults.get("halt_condition_config") or defaults.get("early_stop"),
             pack.get("early_stop") if pack else None,
-            config.early_stop_config,
+            config.halt_condition_config,
         ):
             if source:
-                early_stop_config.update(source)
-        if not early_stop_config:
-            early_stop_config = None
-        if not early_stop_plugin_defs and early_stop_config:
-            early_stop_plugin_defs.extend(normalize_early_stop_definitions(early_stop_config))
-        early_stop_plugins = (
-            [create_early_stop_plugin(defn) for defn in early_stop_plugin_defs] if early_stop_plugin_defs else None
+                halt_condition_config.update(source)
+        if not halt_condition_config:
+            halt_condition_config = None
+        if not halt_condition_plugin_defs and halt_condition_config:
+            halt_condition_plugin_defs.extend(normalize_halt_condition_definitions(halt_condition_config))
+        halt_condition_plugins = (
+            [create_halt_condition_plugin(defn) for defn in halt_condition_plugin_defs] if halt_condition_plugin_defs else None
         )
 
         security_level = resolve_security_level(
@@ -108,19 +108,19 @@ class ExperimentSuiteRunner:
             defaults.get("security_level"),
         )
 
-        row_defs = list(defaults.get("row_plugin_defs", []))
-        if pack and pack.get("row_plugins"):
-            row_defs = list(pack.get("row_plugins", [])) + row_defs
-        if config.row_plugin_defs:
-            row_defs += config.row_plugin_defs
-        row_plugins = [create_row_plugin(defn) for defn in row_defs] if row_defs else None
+        row_defs = list(defaults.get("transform_plugin_defs", []))
+        if pack and pack.get("transform_plugins"):
+            row_defs = list(pack.get("transform_plugins", [])) + row_defs
+        if config.transform_plugin_defs:
+            row_defs += config.transform_plugin_defs
+        transform_plugins = [create_transform_plugin(defn) for defn in row_defs] if row_defs else None
 
-        agg_defs = list(defaults.get("aggregator_plugin_defs", []))
-        if pack and pack.get("aggregator_plugins"):
-            agg_defs = list(pack.get("aggregator_plugins", [])) + agg_defs
-        if config.aggregator_plugin_defs:
-            agg_defs += config.aggregator_plugin_defs
-        aggregator_plugins = [create_aggregation_plugin(defn) for defn in agg_defs] if agg_defs else None
+        agg_defs = list(defaults.get("aggregation_transform_defs", []))
+        if pack and pack.get("aggregation_transforms"):
+            agg_defs = list(pack.get("aggregation_transforms", [])) + agg_defs
+        if config.aggregation_transform_defs:
+            agg_defs += config.aggregation_transform_defs
+        aggregation_transforms = [create_aggregation_transform(defn) for defn in agg_defs] if agg_defs else None
 
         rate_limiter = defaults.get("rate_limiter")
         if defaults.get("rate_limiter_def"):
@@ -164,18 +164,18 @@ class ExperimentSuiteRunner:
             "prompt_fields": prompt_fields,
             "criteria": criteria,
             "prompt_defaults": prompt_defaults or None,
-            "row_plugins": row_plugins,
-            "aggregator_plugins": aggregator_plugins,
+            "transform_plugins": transform_plugins,
+            "aggregation_transforms": aggregation_transforms,
             "rate_limiter": rate_limiter,
             "cost_tracker": cost_tracker,
-            "experiment_name": config.name,
+            "cycle_name": config.name,
             "llm_middlewares": middlewares or None,
             "concurrency_config": concurrency_config,
             "security_level": security_level,
-            "early_stop_plugins": early_stop_plugins,
-            "early_stop_config": early_stop_config,
+            "halt_condition_plugins": halt_condition_plugins,
+            "halt_condition_config": halt_condition_config,
         }
-        return ExperimentRunner(**runner_kwargs)
+        return SDARunner(**runner_kwargs)
 
     def _create_middlewares(self, definitions: list[Dict[str, Any]] | None) -> list[Any]:
         instances: list[Any] = []

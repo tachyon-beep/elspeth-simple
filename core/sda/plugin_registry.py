@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
-from dmp.core.experiments.plugins import (
+from dmp.core.sda.plugins import (
     RowExperimentPlugin,
     AggregationExperimentPlugin,
     BaselineComparisonPlugin,

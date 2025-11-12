@@ -8,10 +8,10 @@ from typing import Any, Dict, List
 import pandas as pd
 
 from dmp.core.interfaces import DataSource, LLMClientProtocol, ResultSink
-from dmp.core.experiments.runner import ExperimentRunner
+from dmp.core.sda.runner import ExperimentRunner
 from dmp.core.controls import RateLimiter, CostTracker
 from dmp.core.llm.registry import create_middlewares
-from dmp.core.experiments.plugin_registry import create_row_plugin, create_aggregation_plugin, create_early_stop_plugin
+from dmp.core.sda.plugin_registry import create_row_plugin, create_aggregation_plugin, create_early_stop_plugin
 
 
 @dataclass

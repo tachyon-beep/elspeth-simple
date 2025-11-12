@@ -9,7 +9,7 @@ import json
 
 from dmp.core.config_schema import validate_experiment_config
 from dmp.core.validation import ConfigurationError
-from dmp.core.experiments.plugin_registry import normalize_early_stop_definitions
+from dmp.core.sda.plugin_registry import normalize_early_stop_definitions
 
 
 @dataclass

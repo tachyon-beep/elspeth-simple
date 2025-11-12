@@ -11,7 +11,7 @@ import yaml
 from dmp.core.orchestrator import OrchestratorConfig
 from dmp.core.registry import registry
 from dmp.core.controls import create_rate_limiter, create_cost_tracker
-from dmp.core.experiments.plugin_registry import normalize_early_stop_definitions
+from dmp.core.sda.plugin_registry import normalize_early_stop_definitions
 
 
 @dataclass

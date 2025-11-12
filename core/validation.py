@@ -178,7 +178,7 @@ def validate_settings(path: str | Path, profile: str = "default") -> ValidationR
         return report
 
     from dmp.core import registry as core_registry
-    from dmp.core.experiments import plugin_registry as exp_registry
+    from dmp.core.sda import plugin_registry as exp_registry
     from dmp.core.llm import registry as llm_registry
     from dmp.core.controls import registry as controls_registry
 
@@ -258,7 +258,7 @@ def validate_suite(
         return SuiteValidationReport(report=report)
 
     from dmp.core import registry as core_registry
-    from dmp.core.experiments import plugin_registry as exp_registry
+    from dmp.core.sda import plugin_registry as exp_registry
     from dmp.core.llm import registry as llm_registry
     from dmp.core.controls import registry as controls_registry
 

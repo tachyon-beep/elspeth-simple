@@ -17,7 +17,7 @@ import pandas as pd
 
 from dmp.config import load_settings
 from dmp.core.orchestrator import ExperimentOrchestrator
-from dmp.core.experiments import ExperimentSuiteRunner, ExperimentSuite
+from dmp.core.sda import ExperimentSuiteRunner, ExperimentSuite
 from dmp.plugins.outputs.csv_file import CsvResultSink
 from dmp.core.controls import create_rate_limiter, create_cost_tracker
 from dmp.core.validation import validate_settings, validate_suite

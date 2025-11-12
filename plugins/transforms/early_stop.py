@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from dmp.core.experiments.plugin_registry import register_early_stop_plugin
+from dmp.core.sda.plugin_registry import register_early_stop_plugin
 
 
 class ThresholdEarlyStopPlugin:

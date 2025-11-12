@@ -18,8 +18,8 @@ from dmp.core.interfaces import LLMClientProtocol, ResultSink
 from dmp.core.processing import prepare_prompt_context
 from dmp.core.prompts import PromptEngine, PromptTemplate, PromptRenderingError, PromptValidationError
 from dmp.core.llm.middleware import LLMMiddleware, LLMRequest
-from dmp.core.experiments.plugins import RowExperimentPlugin, AggregationExperimentPlugin, EarlyStopPlugin
-from dmp.core.experiments.plugin_registry import create_early_stop_plugin
+from dmp.core.sda.plugins import RowExperimentPlugin, AggregationExperimentPlugin, EarlyStopPlugin
+from dmp.core.sda.plugin_registry import create_early_stop_plugin
 from dmp.core.controls import RateLimiter, CostTracker
 from dmp.core.security import normalize_security_level, resolve_security_level
 from dmp.core.artifact_pipeline import ArtifactPipeline, SinkBinding

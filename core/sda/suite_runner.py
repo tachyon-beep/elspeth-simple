@@ -7,9 +7,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Callable
 
-from dmp.core.experiments.config import ExperimentSuite, ExperimentConfig
-from dmp.core.experiments.runner import ExperimentRunner
-from dmp.core.experiments.plugin_registry import (
+from dmp.core.sda.config import ExperimentSuite, ExperimentConfig
+from dmp.core.sda.runner import ExperimentRunner
+from dmp.core.sda.plugin_registry import (
     create_row_plugin,
     create_aggregation_plugin,
     create_baseline_plugin,

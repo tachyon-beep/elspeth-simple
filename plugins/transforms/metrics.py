@@ -11,7 +11,7 @@ from typing import Any, Dict, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-from dmp.core.experiments.plugin_registry import (
+from dmp.core.sda.plugin_registry import (
     register_row_plugin,
     register_aggregation_plugin,
     register_baseline_plugin,

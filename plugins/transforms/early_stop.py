@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from dmp.core.sda.plugin_registry import register_early_stop_plugin
+from dmp.core.sda.plugin_registry import register_halt_condition_plugin
 
 
 class ThresholdEarlyStopPlugin:
@@ -100,7 +100,7 @@ class ThresholdEarlyStopPlugin:
         return value >= threshold
 
 
-register_early_stop_plugin(
+register_halt_condition_plugin(
     ThresholdEarlyStopPlugin.name,
     lambda options: ThresholdEarlyStopPlugin(
         metric=options.get("metric"),

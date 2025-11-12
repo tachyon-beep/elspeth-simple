@@ -12,9 +12,9 @@ import numpy as np
 import pandas as pd
 
 from dmp.core.sda.plugin_registry import (
-    register_row_plugin,
-    register_aggregation_plugin,
-    register_baseline_plugin,
+    register_transform_plugin,
+    register_aggregation_transform,
+    register_comparison_plugin,
 )
 
 logger = logging.getLogger(__name__)
@@ -206,7 +206,7 @@ class ScoreExtractorPlugin:
         self._threshold_mode = threshold_mode
         self._flag_field = flag_field
 
-    def process_row(self, row: Dict[str, Any], responses: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+    def transform(self, row: Dict[str, Any], responses: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
         scores: Dict[str, float] = {}
         flags: Dict[str, bool] = {}
 
@@ -275,7 +275,7 @@ class ScoreExtractorPlugin:
         raise ValueError(f"Unsupported threshold_mode '{mode}'")
 
 
-register_row_plugin(
+register_transform_plugin(
     "score_extractor",
     lambda options: ScoreExtractorPlugin(
         key=options.get("key", "score"),
@@ -306,7 +306,7 @@ class ScoreStatsAggregator:
         self._flag_field = flag_field
         self._ddof = ddof
 
-    def finalize(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
+    def aggregate(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
         criteria_values: Dict[str, Dict[str, Any]] = {}
 
         for record in records:
@@ -415,7 +415,7 @@ class ScoreDeltaBaselinePlugin:
         return criteria
 
 
-register_aggregation_plugin(
+register_aggregation_transform(
     "score_stats",
     lambda options: ScoreStatsAggregator(
         source_field=options.get("source_field", "scores"),
@@ -425,7 +425,7 @@ register_aggregation_plugin(
     schema=_STATS_SCHEMA,
 )
 
-register_baseline_plugin(
+register_comparison_plugin(
     "score_delta",
     lambda options: ScoreDeltaBaselinePlugin(
         metric=options.get("metric", "mean"),
@@ -479,7 +479,7 @@ class ScoreCliffsDeltaPlugin:
         return results
 
 
-register_baseline_plugin(
+register_comparison_plugin(
     "score_cliffs_delta",
     lambda options: ScoreCliffsDeltaPlugin(
         criteria=options.get("criteria"),
@@ -576,7 +576,7 @@ class ScoreAssumptionsBaselinePlugin:
         return results
 
 
-register_baseline_plugin(
+register_comparison_plugin(
     "score_assumptions",
     lambda options: ScoreAssumptionsBaselinePlugin(
         criteria=options.get("criteria"),
@@ -654,7 +654,7 @@ class ScorePracticalBaselinePlugin:
         return results
 
 
-register_baseline_plugin(
+register_comparison_plugin(
     "score_practical",
     lambda options: ScorePracticalBaselinePlugin(
         criteria=options.get("criteria"),
@@ -748,7 +748,7 @@ class ScoreSignificanceBaselinePlugin:
         return results
 
 
-register_baseline_plugin(
+register_comparison_plugin(
     "score_significance",
     lambda options: ScoreSignificanceBaselinePlugin(
         criteria=options.get("criteria"),
@@ -810,7 +810,7 @@ class ScoreBayesianBaselinePlugin:
         return results
 
 
-register_baseline_plugin(
+register_comparison_plugin(
     "score_bayes",
     lambda options: ScoreBayesianBaselinePlugin(
         criteria=options.get("criteria"),
@@ -839,8 +839,8 @@ class ScoreRecommendationAggregator:
         self._improvement_margin = improvement_margin
         self._stats = ScoreStatsAggregator(source_field=source_field, flag_field=flag_field)
 
-    def finalize(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
-        stats = self._stats.finalize(records)
+    def aggregate(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
+        stats = self._stats.aggregate(records)
         overall = stats.get("overall", {})
         criteria = stats.get("criteria", {})
         count = overall.get("count", 0)
@@ -892,7 +892,7 @@ class ScoreRecommendationAggregator:
         return ", ".join(clauses)
 
 
-register_aggregation_plugin(
+register_aggregation_transform(
     "score_recommendation",
     lambda options: ScoreRecommendationAggregator(
         min_samples=int(options.get("min_samples", 5)),
@@ -914,7 +914,7 @@ class ScoreVariantRankingAggregator:
         self._weight_mean = float(weight_mean)
         self._weight_pass = float(weight_pass)
 
-    def finalize(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
+    def aggregate(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
         values = []
         pass_count = 0
         for record in records:
@@ -958,7 +958,7 @@ class ScoreVariantRankingAggregator:
         }
 
 
-register_aggregation_plugin(
+register_aggregation_transform(
     "score_variant_ranking",
     lambda options: ScoreVariantRankingAggregator(
         threshold=float(options.get("threshold", 0.7)),
@@ -989,16 +989,16 @@ class ScoreAgreementAggregator:
             raise ValueError("on_error must be 'abort' or 'skip'")
         self._on_error = on_error
 
-    def finalize(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
+    def aggregate(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
         try:
-            return self._finalize_impl(records)
+            return self._aggregate_impl(records)
         except Exception as exc:  # pragma: no cover - defensive
             if self._on_error == "skip":
                 logger.warning("score_agreement skipped due to error: %s", exc)
                 return {}
             raise
 
-    def _finalize_impl(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
+    def _aggregate_impl(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
         if not records:
             return {}
 
@@ -1078,7 +1078,7 @@ class ScoreAgreementAggregator:
         }
 
 
-register_aggregation_plugin(
+register_aggregation_transform(
     "score_agreement",
     lambda options: ScoreAgreementAggregator(
         criteria=options.get("criteria"),
@@ -1115,16 +1115,16 @@ class ScorePowerAggregator:
             raise ValueError("on_error must be 'abort' or 'skip'")
         self._on_error = on_error
 
-    def finalize(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
+    def aggregate(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
         try:
-            return self._finalize_impl(records)
+            return self._aggregate_impl(records)
         except Exception as exc:  # pragma: no cover - defensive
             if self._on_error == "skip":
                 logger.warning("score_power skipped due to error: %s", exc)
                 return {}
             raise
 
-    def _finalize_impl(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
+    def _aggregate_impl(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
         if not records:
             return {}
         scores_by_name = _collect_scores_by_criterion({"results": records})
@@ -1183,7 +1183,7 @@ class ScorePowerAggregator:
         return power_results
 
 
-register_aggregation_plugin(
+register_aggregation_transform(
     "score_power",
     lambda options: ScorePowerAggregator(
         criteria=options.get("criteria"),
@@ -1216,8 +1216,8 @@ class ScoreDistributionAggregator:
             raise ValueError("on_error must be 'abort' or 'skip'")
         self._on_error = on_error
 
-    def finalize(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
-        # This aggregator expects to inspect baseline + variant payloads, so per-run finalize is empty.
+    def aggregate(self, records: list[Dict[str, Any]]) -> Dict[str, Any]:
+        # This aggregator expects to inspect baseline + variant payloads, so per-run aggregate is empty.
         return {}
 
     def compare(self, baseline: Dict[str, Any], variant: Dict[str, Any]) -> Dict[str, Any]:
@@ -1247,7 +1247,7 @@ class ScoreDistributionAggregator:
         return results
 
 
-register_baseline_plugin(
+register_comparison_plugin(
     "score_distribution",
     lambda options: ScoreDistributionAggregator(
         criteria=options.get("criteria"),

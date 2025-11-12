@@ -1,29 +1,29 @@
-"""Experiment plugin interfaces."""
+"""SDA plugin interfaces for data transformation."""
 
 from __future__ import annotations
 
 from typing import Dict, Protocol, Any, List, Optional
 
 
-class RowExperimentPlugin(Protocol):
-    """Processes a single experiment row and returns derived fields."""
+class TransformPlugin(Protocol):
+    """Transforms a single data input during the DECIDE phase and returns derived fields."""
 
     name: str
 
-    def process_row(self, row: Dict[str, Any], responses: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, row: Dict[str, Any], responses: Dict[str, Any]) -> Dict[str, Any]:
         ...
 
 
-class AggregationExperimentPlugin(Protocol):
-    """Runs after all rows to compute aggregated outputs."""
+class AggregationTransform(Protocol):
+    """Performs aggregation transformation across all results after individual transforms complete."""
 
     name: str
 
-    def finalize(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def aggregate(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
         ...
 
 
-class BaselineComparisonPlugin(Protocol):
+class ComparisonPlugin(Protocol):
     """Compares variant payloads against baseline payload."""
 
     name: str
@@ -32,7 +32,7 @@ class BaselineComparisonPlugin(Protocol):
         ...
 
 
-class EarlyStopPlugin(Protocol):
+class HaltConditionPlugin(Protocol):
     """Observes row-level results and signals when processing should halt."""
 
     name: str

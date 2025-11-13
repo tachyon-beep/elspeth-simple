@@ -1,0 +1,73 @@
+# Simple OpenRouter Example
+# This configuration reads from a CSV, processes each row with OpenRouter, and writes to output CSV
+#
+# Usage: elspeth --settings simple_example.yaml
+
+default:
+  # Data Source: Read from local CSV file
+  datasource:
+    plugin: local_csv
+    options:
+      path: example/simple/data/sample_input.csv
+
+  # LLM: Use OpenRouter with configuration from .env
+  llm:
+    plugin: openrouter
+    options:
+      config:
+        # Load API key from environment variable
+        api_key_env: OPENROUTER_API_KEY
+        # Load model name from environment variable
+        model_env: OPENROUTER_MODEL
+        # Optional: Add site URL for OpenRouter rankings
+        site_url: https://github.com/yourusername/elspeth-simple
+        # Optional: Add app name for OpenRouter rankings
+        app_name: elspeth-simple
+        # Generation parameters
+        temperature: 0.7
+        max_tokens: 500
+
+  # Output Sinks: Write results to CSV
+  sinks:
+    - plugin: csv
+      options:
+        path: example/simple/output/results.csv
+        overwrite: true
+
+  # Prompts: Define the system and user prompts
+  prompts:
+    system: |
+      You are a helpful assistant that analyzes customer feedback.
+      You provide concise summaries and sentiment analysis.
+      Always respond in JSON format.
+
+    user: |
+      Analyze this customer feedback:
+
+      Text: {text}
+      Original Category: {category}
+
+      Please provide:
+      1. A one-sentence summary
+      2. The sentiment (positive, negative, or neutral)
+      3. Key themes or topics mentioned
+
+      Respond in JSON format with fields: summary, sentiment, themes
+
+  # Prompt Fields: Which CSV columns to include in the prompt
+  prompt_fields:
+    - text
+    - category
+
+  # Optional: Rate limiting to avoid API throttling
+  rate_limiter:
+    plugin: adaptive
+    options:
+      requests_per_minute: 10
+
+  # Optional: Track API costs (disabled by default unless you know the model pricing)
+  # cost_tracker:
+  #   plugin: fixed_price
+  #   options:
+  #     prompt_token_price: 0.0000001
+  #     completion_token_price: 0.0000004

@@ -283,7 +283,10 @@ def validate_suite(
             report.errors.append(message)
         name = data.get("name") or folder.name
         enabled = bool(data.get("enabled", True))
+        # Check both old location and new metadata location
         is_baseline = bool(data.get("is_baseline", False))
+        if not is_baseline and "metadata" in data:
+            is_baseline = bool(data["metadata"].get("is_baseline", False))
         if enabled:
             names.append(name)
             if is_baseline:
@@ -328,8 +331,10 @@ def validate_suite(
     for dup in duplicates:
         report.add_error(f"Duplicate experiment name '{dup}'", context="suite")
 
+    # Baseline is optional - only required for experimental orchestrator
+    # StandardOrchestrator doesn't need one
     if baseline_count == 0:
-        report.add_error("No baseline experiment found", context="suite")
+        report.add_warning("No baseline experiment found (required for experimental orchestrator)", context="suite")
 
     warnings = []
     for exp in experiments:

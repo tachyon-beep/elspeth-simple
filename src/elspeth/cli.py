@@ -20,7 +20,8 @@ import pandas as pd
 from elspeth.config import load_settings
 from elspeth.core.config_merger import ConfigSource, ConfigurationMerger
 from elspeth.core.orchestrator import SDAOrchestrator
-from elspeth.core.sda import SDASuite, SDASuiteRunner
+from elspeth.core.sda import SDASuite
+from elspeth.orchestrators import StandardOrchestrator, ExperimentalOrchestrator
 from elspeth.core.validation import validate_settings, validate_suite
 from elspeth.plugins.outputs.csv_file import CsvResultSink
 
@@ -323,15 +324,29 @@ def _clone_suite_sinks(base_sinks: list, experiment_name: str) -> list:
 
 
 def _run_suite(args: argparse.Namespace, settings, suite_root: Path, *, preflight: dict | None = None) -> None:
-    """Run experiment suite with merged configuration."""
+    """Run suite with appropriate orchestrator based on orchestrator_type."""
     logger.info("Running suite at %s", suite_root)
     suite = SDASuite.load(suite_root)
     df = settings.datasource.load()
-    suite_runner = SDASuiteRunner(
-        suite=suite,
-        llm_client=settings.llm,
-        sinks=settings.sinks,
-    )
+
+    # Determine orchestrator type (default to experimental for backward compatibility)
+    orchestrator_type = getattr(settings, "orchestrator_type", "experimental")
+    if orchestrator_type == "standard":
+        suite_runner = StandardOrchestrator(
+            suite=suite,
+            llm_client=settings.llm,
+            sinks=settings.sinks,
+        )
+        logger.info("Using StandardOrchestrator (simple sequential execution)")
+    elif orchestrator_type == "experimental":
+        suite_runner = ExperimentalOrchestrator(
+            suite=suite,
+            llm_client=settings.llm,
+            sinks=settings.sinks,
+        )
+        logger.info("Using ExperimentalOrchestrator (baseline comparison)")
+    else:
+        raise ValueError(f"Unknown orchestrator_type: {orchestrator_type}. Must be 'standard' or 'experimental'")
 
     # Use ConfigurationMerger for defaults
     merger = ConfigurationMerger()
@@ -348,10 +363,10 @@ def _run_suite(args: argparse.Namespace, settings, suite_root: Path, *, prefligh
     # Add optional fields if present
     if settings.orchestrator_config.prompt_pack:
         orch_config_data["prompt_pack"] = settings.orchestrator_config.prompt_pack
-    if settings.orchestrator_config.row_plugin_defs:
-        orch_config_data["row_plugin_defs"] = settings.orchestrator_config.row_plugin_defs
-    if settings.orchestrator_config.aggregator_plugin_defs:
-        orch_config_data["aggregator_plugin_defs"] = settings.orchestrator_config.aggregator_plugin_defs
+    if settings.orchestrator_config.transform_plugin_defs:
+        orch_config_data["row_plugin_defs"] = settings.orchestrator_config.transform_plugin_defs
+    if settings.orchestrator_config.aggregation_transform_defs:
+        orch_config_data["aggregator_plugin_defs"] = settings.orchestrator_config.aggregation_transform_defs
     if settings.orchestrator_config.baseline_plugin_defs:
         orch_config_data["baseline_plugin_defs"] = settings.orchestrator_config.baseline_plugin_defs
     if settings.orchestrator_config.sink_defs:
@@ -362,10 +377,10 @@ def _run_suite(args: argparse.Namespace, settings, suite_root: Path, *, prefligh
         orch_config_data["prompt_defaults"] = settings.orchestrator_config.prompt_defaults
     if settings.orchestrator_config.concurrency_config:
         orch_config_data["concurrency_config"] = settings.orchestrator_config.concurrency_config
-    if settings.orchestrator_config.early_stop_plugin_defs:
-        orch_config_data["early_stop_plugin_defs"] = settings.orchestrator_config.early_stop_plugin_defs
-    if settings.orchestrator_config.early_stop_config:
-        orch_config_data["early_stop_config"] = settings.orchestrator_config.early_stop_config
+    if settings.orchestrator_config.halt_condition_plugin_defs:
+        orch_config_data["early_stop_plugin_defs"] = settings.orchestrator_config.halt_condition_plugin_defs
+    if settings.orchestrator_config.halt_condition_config:
+        orch_config_data["early_stop_config"] = settings.orchestrator_config.halt_condition_config
 
     # Source 2: suite_defaults (with key normalization)
     suite_defaults = settings.suite_defaults or {}

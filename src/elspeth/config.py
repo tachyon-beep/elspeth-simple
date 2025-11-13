@@ -21,6 +21,7 @@ class Settings:
     llm: Any
     sinks: Any
     orchestrator_config: SDAConfig
+    orchestrator_type: str = "experimental"  # "standard" or "experimental"
     suite_root: Path | None = None
     suite_defaults: dict[str, Any] = field(default_factory=dict)
     rate_limiter: Any | None = None
@@ -126,12 +127,14 @@ def load_settings(path: str | Path, profile: str = "default") -> Settings:
     )
 
     suite_root = merged_config.get("suite_root")
+    orchestrator_type = merged_config.get("orchestrator_type", "experimental")
 
     return Settings(
         datasource=datasource,
         llm=llm,
         sinks=sinks,
         orchestrator_config=orchestrator_config,
+        orchestrator_type=orchestrator_type,
         suite_root=Path(suite_root) if suite_root else None,
         suite_defaults=suite_defaults,
         rate_limiter=rate_limiter,

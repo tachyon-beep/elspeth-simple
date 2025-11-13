@@ -1,14 +1,6 @@
-"""Suite runner orchestrating multiple SDA cycles.
-
-DEPRECATED: This module is deprecated and will be removed in a future version.
-Use orchestrators.StandardOrchestrator or orchestrators.ExperimentalOrchestrator instead.
-
-This module is kept for backward compatibility only.
-"""
+"""Standard orchestrator for sequential SDA cycle execution."""
 
 from __future__ import annotations
-
-import warnings
 
 from dataclasses import dataclass, field
 import json
@@ -20,7 +12,6 @@ from elspeth.core.sda.runner import SDARunner
 from elspeth.core.sda.plugin_registry import (
     create_transform_plugin,
     create_aggregation_transform,
-    create_baseline_plugin,
     create_halt_condition_plugin,
     normalize_halt_condition_definitions,
 )
@@ -34,19 +25,16 @@ from elspeth.core.config_merger import ConfigurationMerger, ConfigSource
 
 
 @dataclass
-class SDASuiteRunner:
-    """DEPRECATED: Use ExperimentalOrchestrator from orchestrators package instead."""
+class StandardOrchestrator:
+    """Standard orchestrator - executes SDA cycles sequentially.
+
+    No baseline tracking, no comparison logic.
+    Just runs cycles in order as defined in suite.
+    """
     suite: SDASuite
     llm_client: LLMClientProtocol
     sinks: List[ResultSink]
     _shared_middlewares: Dict[str, Any] = field(default_factory=dict, init=False)
-
-    def __post_init__(self):
-        warnings.warn(
-            "SDASuiteRunner is deprecated. Use orchestrators.ExperimentalOrchestrator instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
     def build_runner(
         self,
@@ -54,12 +42,12 @@ class SDASuiteRunner:
         defaults: Dict[str, Any],
         sinks: List[ResultSink],
     ) -> SDARunner:
-        """Build runner for single experiment with merged configuration.
+        """Build runner for single cycle with merged configuration.
 
         Merging precedence:
         1. defaults (from Settings)
         2. prompt_pack (if specified)
-        3. config (experiment-specific)
+        3. config (cycle-specific)
         """
         merger = ConfigurationMerger()
 
@@ -76,12 +64,12 @@ class SDASuiteRunner:
             pack = prompt_packs[pack_name]
             sources.append(ConfigSource(name="prompt_pack", data=pack, precedence=2))
 
-        # Source 3: experiment config
+        # Source 3: cycle config
         config_data = {
             k: v for k, v in config.__dict__.items()
             if v is not None and not k.startswith('_')
         }
-        sources.append(ConfigSource(name="experiment", data=config_data, precedence=3))
+        sources.append(ConfigSource(name="cycle", data=config_data, precedence=3))
 
         # Merge all sources
         merged = merger.merge(*sources)
@@ -116,7 +104,7 @@ class SDASuiteRunner:
             if halt_condition_plugin_defs else None
         )
 
-        # Security level resolution (still uses special resolution logic)
+        # Security level resolution
         pack = prompt_packs.get(pack_name) if pack_name and pack_name in prompt_packs else None
         security_level = resolve_security_level(
             config.security_level,
@@ -158,11 +146,11 @@ class SDASuiteRunner:
         # Validate required prompts
         if not (prompt_system or "").strip():
             raise ConfigurationError(
-                f"Experiment '{config.name}' has no system prompt defined. Provide one in the experiment, defaults, or prompt pack."
+                f"Cycle '{config.name}' has no system prompt defined. Provide one in the cycle, defaults, or prompt pack."
             )
         if not (prompt_template or "").strip():
             raise ConfigurationError(
-                f"Experiment '{config.name}' has no user prompt defined. Provide one in the experiment, defaults, or prompt pack."
+                f"Cycle '{config.name}' has no user prompt defined. Provide one in the cycle, defaults, or prompt pack."
             )
 
         runner_kwargs = {
@@ -222,117 +210,92 @@ class SDASuiteRunner:
         sink_factory: Callable[[SDACycleConfig], List[ResultSink]] | None = None,
         preflight_info: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
+        """Run all cycles in suite sequentially.
+
+        No baseline tracking, no comparison logic.
+        Returns results dict keyed by cycle name.
+        """
         defaults = defaults or {}
         results: Dict[str, Any] = {}
         prompt_packs = defaults.get("prompt_packs", {})
 
-        # Note: This code is deprecated. For new code use ExperimentalOrchestrator.
-        # Legacy baseline detection for backward compatibility
-        experiments: List[SDACycleConfig] = []
-        baseline = None
-        for cycle in self.suite.cycles:
-            if cycle.metadata.get("is_baseline"):
-                baseline = cycle
-                break
-        if baseline is None and self.suite.cycles:
-            baseline = self.suite.cycles[0]
-
-        if baseline:
-            experiments.append(baseline)
-        experiments.extend(exp for exp in self.suite.cycles if exp != baseline)
-
-        baseline_payload = None
-        suite_metadata = [
+        # Build cycle metadata (no is_baseline field)
+        cycle_metadata = [
             {
-                "experiment": exp.name,
-                "temperature": exp.temperature,
-                "max_tokens": exp.max_tokens,
-                "is_baseline": exp.metadata.get("is_baseline", False),
+                "cycle": cycle.name,
+                "temperature": cycle.temperature,
+                "max_tokens": cycle.max_tokens,
             }
-            for exp in experiments
+            for cycle in self.suite.cycles
         ]
+
         if preflight_info is None:
             preflight_info = {
-                "experiment_count": len(experiments),
-                "baseline": baseline.name if baseline else None,
+                "cycle_count": len(self.suite.cycles),
             }
+
         notified_middlewares: dict[int, Any] = {}
 
-        for experiment in experiments:
-            pack_name = experiment.prompt_pack or defaults.get("prompt_pack")
+        # Run cycles in order (no baseline reordering)
+        for cycle in self.suite.cycles:
+            pack_name = cycle.prompt_pack or defaults.get("prompt_pack")
             pack = prompt_packs.get(pack_name) if pack_name else None
 
-            if experiment.sink_defs:
-                sinks = self._instantiate_sinks(experiment.sink_defs)
+            # Determine sinks
+            if cycle.sink_defs:
+                sinks = self._instantiate_sinks(cycle.sink_defs)
             elif pack and pack.get("sinks"):
                 sinks = self._instantiate_sinks(pack["sinks"])
             elif defaults.get("sink_defs"):
                 sinks = self._instantiate_sinks(defaults["sink_defs"])
             else:
-                sinks = sink_factory(experiment) if sink_factory else self.sinks
+                sinks = sink_factory(cycle) if sink_factory else self.sinks
 
+            # Build and run
             runner = self.build_runner(
-                experiment,
+                cycle,
                 {**defaults, "prompt_packs": prompt_packs, "prompt_pack": pack_name},
                 sinks,
             )
+
+            # Notify middlewares
             middlewares = list(runner.llm_middlewares or [])
-            suite_notified = []
             for mw in middlewares:
                 key = id(mw)
                 if hasattr(mw, "on_suite_loaded") and key not in notified_middlewares:
-                    mw.on_suite_loaded(suite_metadata, preflight_info)
+                    mw.on_suite_loaded(cycle_metadata, preflight_info)
                     notified_middlewares[key] = mw
-                    suite_notified.append(mw)
-                if hasattr(mw, "on_experiment_start"):
+                if hasattr(mw, "on_experiment_start"):  # Legacy name for compatibility
                     mw.on_experiment_start(
-                        experiment.name,
+                        cycle.name,
                         {
-                            "temperature": experiment.temperature,
-                            "max_tokens": experiment.max_tokens,
-                            "is_baseline": experiment.metadata.get("is_baseline", False),
+                            "temperature": cycle.temperature,
+                            "max_tokens": cycle.max_tokens,
                         },
                     )
+
+            # Execute cycle
             payload = runner.run(df)
 
-            if baseline_payload is None and (experiment.metadata.get("is_baseline") or experiment == baseline):
-                baseline_payload = payload
-
-            results[experiment.name] = {
+            # Store results (no baseline comparison)
+            results[cycle.name] = {
                 "payload": payload,
-                "config": experiment,
+                "config": cycle,
             }
+
+            # Notify completion
             for mw in middlewares:
-                if hasattr(mw, "on_experiment_complete"):
+                if hasattr(mw, "on_experiment_complete"):  # Legacy name for compatibility
                     mw.on_experiment_complete(
-                        experiment.name,
+                        cycle.name,
                         payload,
                         {
-                            "temperature": experiment.temperature,
-                            "max_tokens": experiment.max_tokens,
-                            "is_baseline": experiment.metadata.get("is_baseline", False),
+                            "temperature": cycle.temperature,
+                            "max_tokens": cycle.max_tokens,
                         },
                     )
 
-            if baseline_payload and experiment != baseline:
-                comp_defs = list(defaults.get("baseline_plugin_defs", []))
-                if pack and pack.get("baseline_plugins"):
-                    comp_defs = list(pack.get("baseline_plugins", [])) + comp_defs
-                if experiment.metadata.get("baseline_plugins"):
-                    comp_defs += experiment.metadata["baseline_plugins"]
-                comparisons = {}
-                for defn in comp_defs:
-                    plugin = create_baseline_plugin(defn)
-                    diff = plugin.compare(baseline_payload, payload)
-                    if diff:
-                        comparisons[plugin.name] = diff
-                if comparisons:
-                    payload["baseline_comparison"] = comparisons
-                    results[experiment.name]["baseline_comparison"] = comparisons
-                    for mw in middlewares:
-                        if hasattr(mw, "on_baseline_comparison"):
-                            mw.on_baseline_comparison(experiment.name, comparisons)
-
+        # Suite complete notification
         for mw in notified_middlewares.values():
             if hasattr(mw, "on_suite_complete"):
                 mw.on_suite_complete()

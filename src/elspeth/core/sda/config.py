@@ -14,15 +14,20 @@ from elspeth.core.sda.plugin_registry import normalize_halt_condition_definition
 
 @dataclass
 class SDACycleConfig:
+    """Configuration for a single SDA cycle.
+
+    Core SDA orchestration parameters only.
+    Experiment-specific fields (is_baseline, hypothesis, baseline_plugins)
+    should be placed in metadata dict for use by ExperimentalOrchestrator.
+    """
     name: str
     temperature: float
     max_tokens: int
     enabled: bool = True
-    is_baseline: bool = False
     description: str = ""
-    hypothesis: str = ""
     author: str = "unknown"
     tags: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)  # For experiment-specific data
     options: Dict[str, Any] = field(default_factory=dict)
     prompt_system: str = ""
     prompt_template: str = ""
@@ -34,7 +39,6 @@ class SDACycleConfig:
     rate_limiter_def: Optional[Dict[str, Any]] = None
     cost_tracker_def: Optional[Dict[str, Any]] = None
     prompt_pack: Optional[str] = None
-    baseline_plugin_defs: List[Dict[str, Any]] = field(default_factory=list)
     prompt_defaults: Optional[Dict[str, Any]] = None
     llm_middleware_defs: List[Dict[str, Any]] = field(default_factory=list)
     concurrency_config: Dict[str, Any] | None = None
@@ -66,16 +70,25 @@ class SDACycleConfig:
         if not halt_condition_plugin_defs and data.get("early_stop"):
             halt_condition_plugin_defs = normalize_halt_condition_definitions(data.get("early_stop"))
 
+        # Build metadata dict (for experiment-specific fields)
+        metadata = data.get("metadata", {})
+        # Migrate legacy fields to metadata
+        if "is_baseline" in data:
+            metadata["is_baseline"] = data["is_baseline"]
+        if "hypothesis" in data:
+            metadata["hypothesis"] = data["hypothesis"]
+        if "baseline_plugins" in data:
+            metadata["baseline_plugins"] = data["baseline_plugins"]
+
         return cls(
             name=data.get("name", path.parent.name),
             temperature=data.get("temperature", 0.7),
             max_tokens=data.get("max_tokens", 512),
             enabled=data.get("enabled", True),
-            is_baseline=data.get("is_baseline", False),
             description=data.get("description", ""),
-            hypothesis=data.get("hypothesis", ""),
             author=data.get("author", "unknown"),
             tags=data.get("tags", []),
+            metadata=metadata,
             options=data,
             prompt_system=prompt_system,
             prompt_template=prompt_template,
@@ -87,7 +100,6 @@ class SDACycleConfig:
             rate_limiter_def=data.get("rate_limiter"),
             cost_tracker_def=data.get("cost_tracker"),
             prompt_pack=data.get("prompt_pack"),
-            baseline_plugin_defs=data.get("baseline_plugins", []),
             prompt_defaults=data.get("prompt_defaults"),
             llm_middleware_defs=data.get("llm_middlewares", []),
             concurrency_config=data.get("concurrency"),
@@ -99,14 +111,20 @@ class SDACycleConfig:
 
 @dataclass
 class SDASuite:
+    """Collection of SDA cycles to execute.
+
+    Orchestrators handle baseline identification from cycle metadata.
+    """
     root: Path
     cycles: List[SDACycleConfig]
-    baseline: Optional[SDACycleConfig]
 
     @classmethod
     def load(cls, root: Path) -> "SDASuite":
+        """Load all enabled cycles from directory structure.
+
+        No baseline identification - orchestrators handle that.
+        """
         cycles: List[SDACycleConfig] = []
-        baseline: Optional[SDACycleConfig] = None
 
         for folder in sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")):
             config_path = folder / "config.json"
@@ -115,10 +133,5 @@ class SDASuite:
             cfg = SDACycleConfig.from_file(config_path)
             if cfg.enabled:
                 cycles.append(cfg)
-                if cfg.is_baseline and baseline is None:
-                    baseline = cfg
 
-        if baseline is None and cycles:
-            baseline = cycles[0]
-
-        return cls(root=root, cycles=cycles, baseline=baseline)
+        return cls(root=root, cycles=cycles)

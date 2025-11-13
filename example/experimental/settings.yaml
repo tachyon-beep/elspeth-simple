@@ -1,0 +1,88 @@
+# Experimental Orchestrator Example - Prompt A/B Testing
+#
+# This example demonstrates the experimental orchestrator with:
+# - Multiple prompt strategies (neutral, enthusiastic, critical)
+# - Baseline identification from cycle metadata
+# - Statistical comparison plugins
+# - Automatic ranking of which prompt scores highest
+#
+# Usage: elspeth --settings example/experimental/settings.yaml
+
+default:
+  # Use experimental orchestrator for A/B testing
+  orchestrator_type: experimental
+
+  # Data Source
+  datasource:
+    plugin: local_csv
+    options:
+      path: example/experimental/data/programming_languages.csv
+
+  # LLM Configuration
+  llm:
+    plugin: openrouter
+    options:
+      config:
+        api_key_env: OPENROUTER_API_KEY
+        model_env: OPENROUTER_MODEL
+        temperature: 0.7
+        max_tokens: 300
+        app_name: elspeth-experimental-example
+
+  # Output Configuration
+  sinks:
+    - plugin: csv
+      options:
+        path: example/experimental/output/results.csv
+        overwrite: true
+
+  # Prompt Fields
+  prompt_fields:
+    - language
+    - category
+    - year_created
+    - primary_use
+
+  # Transform Plugins - Extract scores from LLM responses
+  row_plugins:
+    - plugin: score_extractor
+      options:
+        key: rating  # Extract "rating" field from JSON responses
+        parse_json_content: true
+        allow_missing: false
+
+  # Aggregation Plugins - Compute statistics per cycle
+  aggregator_plugins:
+    - plugin: score_stats
+      options:
+        source_field: scores
+        ddof: 1  # Use sample std dev
+
+  # Baseline Comparison Plugins - Compare variants to baseline
+  baseline_plugins:
+    # 1. Score delta (simple mean difference)
+    - plugin: score_delta
+      options:
+        metric: mean
+
+    # 2. Statistical significance (t-tests, effect sizes)
+    - plugin: score_significance
+      options:
+        min_samples: 5
+        equal_var: false  # Welch's t-test
+
+    # 3. Practical significance (meaningful changes)
+    - plugin: score_practical
+      options:
+        threshold: 1.0  # Minimum meaningful difference
+        success_threshold: 7.0  # What counts as "high score"
+        min_samples: 5
+
+  # Rate limiting
+  rate_limiter:
+    plugin: adaptive
+    options:
+      requests_per_minute: 10
+
+  # Suite root directory containing cycles
+  suite_root: example/experimental/cycles

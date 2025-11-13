@@ -100,6 +100,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow sinks to perform live writes (disables repo dry-run modes)",
     )
+    parser.add_argument(
+        "--print-config",
+        action="store_true",
+        help="Print resolved configuration and exit (no execution)",
+    )
+    parser.add_argument(
+        "--explain-config",
+        type=str,
+        metavar="KEY",
+        help="Explain source of specific config key (e.g., 'rate_limiter' or 'llm.options.temperature')",
+    )
     return parser
 
 
@@ -159,6 +170,85 @@ def _result_to_row(record: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+def _print_configuration(args: argparse.Namespace, settings) -> None:
+    """Print resolved configuration for debugging."""
+    import yaml
+
+    # Build configuration dictionary for display
+    config_dict = {
+        "datasource": {
+            "plugin": type(settings.datasource).__name__,
+        },
+        "llm": {
+            "plugin": type(settings.llm).__name__,
+        },
+        "prompts": settings.orchestrator_config.llm_prompt,
+        "row_plugins": settings.orchestrator_config.transform_plugin_defs,
+        "aggregator_plugins": settings.orchestrator_config.aggregation_transform_defs,
+        "baseline_plugins": settings.orchestrator_config.baseline_plugin_defs,
+        "sinks": [{"plugin": type(sink).__name__} for sink in settings.sinks],
+    }
+
+    # Add optional fields
+    if settings.orchestrator_config.prompt_fields:
+        config_dict["prompt_fields"] = settings.orchestrator_config.prompt_fields
+    if settings.orchestrator_config.prompt_aliases:
+        config_dict["prompt_aliases"] = settings.orchestrator_config.prompt_aliases
+    if settings.orchestrator_config.criteria:
+        config_dict["criteria"] = settings.orchestrator_config.criteria
+    if settings.orchestrator_config.concurrency_config:
+        config_dict["concurrency"] = settings.orchestrator_config.concurrency_config
+    if settings.orchestrator_config.retry_config:
+        config_dict["retry"] = settings.orchestrator_config.retry_config
+    if settings.orchestrator_config.checkpoint_config:
+        config_dict["checkpoint"] = settings.orchestrator_config.checkpoint_config
+    if settings.orchestrator_config.halt_condition_config:
+        config_dict["early_stop"] = settings.orchestrator_config.halt_condition_config
+    if settings.orchestrator_config.halt_condition_plugin_defs:
+        config_dict["early_stop_plugins"] = settings.orchestrator_config.halt_condition_plugin_defs
+    if settings.orchestrator_config.llm_middleware_defs:
+        config_dict["llm_middlewares"] = settings.orchestrator_config.llm_middleware_defs
+    if settings.orchestrator_config.prompt_defaults:
+        config_dict["prompt_defaults"] = settings.orchestrator_config.prompt_defaults
+    if settings.rate_limiter:
+        config_dict["rate_limiter"] = type(settings.rate_limiter).__name__
+    if settings.cost_tracker:
+        config_dict["cost_tracker"] = type(settings.cost_tracker).__name__
+    if settings.suite_root:
+        config_dict["suite_root"] = str(settings.suite_root)
+    if settings.suite_defaults:
+        config_dict["suite_defaults"] = settings.suite_defaults
+    if settings.prompt_pack:
+        config_dict["prompt_pack"] = settings.prompt_pack
+
+    print("# Resolved Configuration")
+    print(f"# Loaded from: {args.settings} (profile: {args.profile})")
+    print()
+
+    if args.explain_config:
+        # Explain specific key
+        print(f"Configuration key: {args.explain_config}")
+        print()
+        print("Note: Full explain() support requires preserving ConfigurationMerger instance.")
+        print("Currently showing resolved value only:")
+        print()
+
+        # Navigate to the key value
+        keys = args.explain_config.split(".")
+        value = config_dict
+        for k in keys:
+            if isinstance(value, dict) and k in value:
+                value = value[k]
+            else:
+                print(f"{args.explain_config} = <not found>")
+                return
+
+        print(f"{args.explain_config} = {value}")
+    else:
+        # Print full config
+        print(yaml.dump(config_dict, default_flow_style=False, sort_keys=False))
+
+
 def run(args: argparse.Namespace) -> None:
     configure_logging(args.log_level)
     settings_report = validate_settings(args.settings, profile=args.profile)
@@ -166,6 +256,11 @@ def run(args: argparse.Namespace) -> None:
         logger.warning(warning.format())
     settings_report.raise_if_errors()
     settings = load_settings(args.settings, profile=args.profile)
+
+    # Handle --print-config and --explain-config
+    if args.print_config or args.explain_config:
+        _print_configuration(args, settings)
+        return
     if args.disable_metrics:
         _strip_metrics_plugins(settings)
     _configure_sink_dry_run(settings, enable_live=args.live_outputs)

@@ -80,3 +80,57 @@ def test_merge_append_empty_base():
 
     result = merger.merge(source1, source2)
     assert result == {"sinks": [{"plugin": "csv"}]}
+
+
+def test_merge_deep_merge_strategy():
+    """Test deep merging of nested dictionaries."""
+    merger = ConfigurationMerger()
+    source1 = ConfigSource(
+        name="pack",
+        data={"llm": {"plugin": "azure_openai", "options": {"temperature": 0.5}}},
+        precedence=1
+    )
+    source2 = ConfigSource(
+        name="profile",
+        data={"llm": {"options": {"temperature": 0.7, "max_tokens": 100}}},
+        precedence=2
+    )
+
+    result = merger.merge(source1, source2)
+    expected = {
+        "llm": {
+            "plugin": "azure_openai",
+            "options": {
+                "temperature": 0.7,  # Overridden from source2
+                "max_tokens": 100     # Added from source2
+            }
+        }
+    }
+    assert result == expected
+
+
+def test_merge_deep_merge_three_levels():
+    """Test deep merging with 3+ levels of nesting."""
+    merger = ConfigurationMerger()
+    source1 = ConfigSource(
+        name="base",
+        data={"retry": {"max_attempts": 3, "backoff": {"initial": 1.0}}},
+        precedence=1
+    )
+    source2 = ConfigSource(
+        name="override",
+        data={"retry": {"backoff": {"multiplier": 2.0}}},
+        precedence=2
+    )
+
+    result = merger.merge(source1, source2)
+    expected = {
+        "retry": {
+            "max_attempts": 3,
+            "backoff": {
+                "initial": 1.0,
+                "multiplier": 2.0
+            }
+        }
+    }
+    assert result == expected

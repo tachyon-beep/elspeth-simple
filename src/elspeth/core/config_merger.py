@@ -125,4 +125,35 @@ class ConfigurationMerger:
                     "appended": value
                 })
 
+            elif strategy == MergeStrategy.DEEP_MERGE:
+                if key not in result:
+                    result[key] = {}
+                result[key] = self._deep_merge_dict(result[key], value)
+                self._merge_trace.append({
+                    "key": key,
+                    "strategy": "deep_merge",
+                    "source": source.name,
+                    "merged_keys": list(value.keys()) if isinstance(value, dict) else []
+                })
+
+        return result
+
+    def _deep_merge_dict(self, base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+        """Recursively merge nested dictionaries.
+
+        Args:
+            base: Base dictionary
+            override: Dictionary to merge into base
+
+        Returns:
+            Merged dictionary (base keys + override keys, override wins on conflicts)
+        """
+        result = base.copy()
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                # Recursively merge nested dicts
+                result[key] = self._deep_merge_dict(result[key], value)
+            else:
+                # Override scalar values or non-dict types
+                result[key] = value
         return result

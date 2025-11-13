@@ -22,6 +22,7 @@ from elspeth.core.sda import SDASuiteRunner, SDASuite
 from elspeth.plugins.outputs.csv_file import CsvResultSink
 from elspeth.core.controls import create_rate_limiter, create_cost_tracker
 from elspeth.core.validation import validate_settings, validate_suite
+from elspeth.core.config_merger import ConfigurationMerger, ConfigSource
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +228,7 @@ def _clone_suite_sinks(base_sinks: list, experiment_name: str) -> list:
 
 
 def _run_suite(args: argparse.Namespace, settings, suite_root: Path, *, preflight: dict | None = None) -> None:
+    """Run experiment suite with merged configuration."""
     logger.info("Running suite at %s", suite_root)
     suite = SDASuite.load(suite_root)
     df = settings.datasource.load()
@@ -236,73 +238,74 @@ def _run_suite(args: argparse.Namespace, settings, suite_root: Path, *, prefligh
         sinks=settings.sinks,
     )
 
-    defaults = {
+    # Use ConfigurationMerger for defaults
+    merger = ConfigurationMerger()
+
+    # Source 1: orchestrator config
+    orch_config_data = {
         "prompt_system": settings.orchestrator_config.llm_prompt.get("system", ""),
         "prompt_template": settings.orchestrator_config.llm_prompt.get("user", ""),
         "prompt_fields": settings.orchestrator_config.prompt_fields,
         "criteria": settings.orchestrator_config.criteria,
+        "prompt_packs": settings.prompt_packs,
     }
-    defaults["prompt_packs"] = settings.prompt_packs
-    if settings.orchestrator_config.prompt_pack:
-        defaults["prompt_pack"] = settings.orchestrator_config.prompt_pack
-    if settings.orchestrator_config.row_plugin_defs:
-        defaults["row_plugin_defs"] = settings.orchestrator_config.row_plugin_defs
-    if settings.orchestrator_config.aggregator_plugin_defs:
-        defaults["aggregator_plugin_defs"] = settings.orchestrator_config.aggregator_plugin_defs
-    if settings.orchestrator_config.baseline_plugin_defs:
-        defaults["baseline_plugin_defs"] = settings.orchestrator_config.baseline_plugin_defs
-    if settings.orchestrator_config.sink_defs:
-        defaults["sink_defs"] = settings.orchestrator_config.sink_defs
-    if settings.orchestrator_config.llm_middleware_defs:
-        defaults["llm_middleware_defs"] = settings.orchestrator_config.llm_middleware_defs
-    if settings.orchestrator_config.prompt_defaults:
-        defaults["prompt_defaults"] = settings.orchestrator_config.prompt_defaults
-    if settings.orchestrator_config.concurrency_config:
-        defaults["concurrency_config"] = settings.orchestrator_config.concurrency_config
-    if settings.orchestrator_config.early_stop_plugin_defs:
-        defaults["early_stop_plugin_defs"] = settings.orchestrator_config.early_stop_plugin_defs
-    if settings.orchestrator_config.early_stop_config:
-        defaults["early_stop_config"] = settings.orchestrator_config.early_stop_config
 
+    # Add optional fields if present
+    if settings.orchestrator_config.prompt_pack:
+        orch_config_data["prompt_pack"] = settings.orchestrator_config.prompt_pack
+    if settings.orchestrator_config.row_plugin_defs:
+        orch_config_data["row_plugin_defs"] = settings.orchestrator_config.row_plugin_defs
+    if settings.orchestrator_config.aggregator_plugin_defs:
+        orch_config_data["aggregator_plugin_defs"] = settings.orchestrator_config.aggregator_plugin_defs
+    if settings.orchestrator_config.baseline_plugin_defs:
+        orch_config_data["baseline_plugin_defs"] = settings.orchestrator_config.baseline_plugin_defs
+    if settings.orchestrator_config.sink_defs:
+        orch_config_data["sink_defs"] = settings.orchestrator_config.sink_defs
+    if settings.orchestrator_config.llm_middleware_defs:
+        orch_config_data["llm_middleware_defs"] = settings.orchestrator_config.llm_middleware_defs
+    if settings.orchestrator_config.prompt_defaults:
+        orch_config_data["prompt_defaults"] = settings.orchestrator_config.prompt_defaults
+    if settings.orchestrator_config.concurrency_config:
+        orch_config_data["concurrency_config"] = settings.orchestrator_config.concurrency_config
+    if settings.orchestrator_config.early_stop_plugin_defs:
+        orch_config_data["early_stop_plugin_defs"] = settings.orchestrator_config.early_stop_plugin_defs
+    if settings.orchestrator_config.early_stop_config:
+        orch_config_data["early_stop_config"] = settings.orchestrator_config.early_stop_config
+
+    # Source 2: suite_defaults (with key normalization)
     suite_defaults = settings.suite_defaults or {}
-    defaults.update(
-        {
-            k: v
-            for k, v in suite_defaults.items()
-            if k
-            not in {"row_plugins", "aggregator_plugins", "sinks", "baseline_plugins", "llm_middlewares", "early_stop_plugins", "early_stop_plugin_defs"}
-        }
-    )
-    if "row_plugins" in suite_defaults:
-        defaults["row_plugin_defs"] = suite_defaults["row_plugins"]
-    if "aggregator_plugins" in suite_defaults:
-        defaults["aggregator_plugin_defs"] = suite_defaults["aggregator_plugins"]
-    if "baseline_plugins" in suite_defaults:
-        defaults["baseline_plugin_defs"] = suite_defaults["baseline_plugins"]
-    if "llm_middlewares" in suite_defaults:
-        defaults["llm_middleware_defs"] = suite_defaults["llm_middlewares"]
-    if "prompt_defaults" in suite_defaults:
-        defaults["prompt_defaults"] = suite_defaults["prompt_defaults"]
-    if "concurrency" in suite_defaults:
-        defaults["concurrency_config"] = suite_defaults["concurrency"]
-    if "early_stop_plugin_defs" in suite_defaults:
-        defaults["early_stop_plugin_defs"] = suite_defaults["early_stop_plugin_defs"]
-    if "early_stop_plugins" in suite_defaults:
-        defaults["early_stop_plugin_defs"] = suite_defaults["early_stop_plugins"]
-    if "early_stop" in suite_defaults:
-        defaults["early_stop_config"] = suite_defaults["early_stop"]
-    if "sinks" in suite_defaults:
-        defaults["sink_defs"] = suite_defaults["sinks"]
+    suite_defaults_normalized = dict(suite_defaults)
+
+    # Normalize plugin key names for consistency
+    if "row_plugins" in suite_defaults_normalized:
+        suite_defaults_normalized["row_plugin_defs"] = suite_defaults_normalized.pop("row_plugins")
+    if "aggregator_plugins" in suite_defaults_normalized:
+        suite_defaults_normalized["aggregator_plugin_defs"] = suite_defaults_normalized.pop("aggregator_plugins")
+    if "baseline_plugins" in suite_defaults_normalized:
+        suite_defaults_normalized["baseline_plugin_defs"] = suite_defaults_normalized.pop("baseline_plugins")
+    if "llm_middlewares" in suite_defaults_normalized:
+        suite_defaults_normalized["llm_middleware_defs"] = suite_defaults_normalized.pop("llm_middlewares")
+    if "concurrency" in suite_defaults_normalized:
+        suite_defaults_normalized["concurrency_config"] = suite_defaults_normalized.pop("concurrency")
+    if "early_stop_plugins" in suite_defaults_normalized:
+        suite_defaults_normalized["early_stop_plugin_defs"] = suite_defaults_normalized.pop("early_stop_plugins")
+    if "early_stop" in suite_defaults_normalized:
+        suite_defaults_normalized["early_stop_config"] = suite_defaults_normalized.pop("early_stop")
+    if "sinks" in suite_defaults_normalized:
+        suite_defaults_normalized["sink_defs"] = suite_defaults_normalized.pop("sinks")
+
+    sources = [
+        ConfigSource(name="orchestrator", data=orch_config_data, precedence=1),
+        ConfigSource(name="suite_defaults", data=suite_defaults_normalized, precedence=2),
+    ]
+
+    defaults = merger.merge(*sources)
+
+    # Add runtime instances (not part of merge)
     if settings.rate_limiter:
         defaults["rate_limiter"] = settings.rate_limiter
     if settings.cost_tracker:
         defaults["cost_tracker"] = settings.cost_tracker
-    if "rate_limiter" in suite_defaults:
-        defaults["rate_limiter_def"] = suite_defaults["rate_limiter"]
-    if "cost_tracker" in suite_defaults:
-        defaults["cost_tracker_def"] = suite_defaults["cost_tracker"]
-    if "prompt_pack" in suite_defaults:
-        defaults["prompt_pack"] = suite_defaults["prompt_pack"]
 
     results = suite_runner.run(
         df,

@@ -110,4 +110,19 @@ class ConfigurationMerger:
                     "value": value
                 })
 
+            elif strategy == MergeStrategy.APPEND:
+                if key not in result:
+                    result[key] = []
+                # Append new items to existing list
+                if isinstance(value, list):
+                    result[key] = result[key] + value
+                else:
+                    result[key].append(value)
+                self._merge_trace.append({
+                    "key": key,
+                    "strategy": "append",
+                    "source": source.name,
+                    "appended": value
+                })
+
         return result

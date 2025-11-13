@@ -48,3 +48,35 @@ def test_merge_multiple_keys_override():
 
     result = merger.merge(source1, source2)
     assert result == {"key1": "value1", "key2": "new_value2", "key3": "value3"}
+
+
+def test_merge_append_strategy():
+    """Test that list keys append from all sources."""
+    merger = ConfigurationMerger()
+    source1 = ConfigSource(
+        name="pack",
+        data={"row_plugins": [{"name": "plugin1"}]},
+        precedence=1
+    )
+    source2 = ConfigSource(
+        name="profile",
+        data={"row_plugins": [{"name": "plugin2"}]},
+        precedence=2
+    )
+
+    result = merger.merge(source1, source2)
+    assert result == {"row_plugins": [{"name": "plugin1"}, {"name": "plugin2"}]}
+
+
+def test_merge_append_empty_base():
+    """Test appending when base doesn't have the key."""
+    merger = ConfigurationMerger()
+    source1 = ConfigSource(name="base", data={}, precedence=1)
+    source2 = ConfigSource(
+        name="override",
+        data={"sinks": [{"plugin": "csv"}]},
+        precedence=2
+    )
+
+    result = merger.merge(source1, source2)
+    assert result == {"sinks": [{"plugin": "csv"}]}

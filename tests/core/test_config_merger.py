@@ -134,3 +134,38 @@ def test_merge_deep_merge_three_levels():
         }
     }
     assert result == expected
+
+
+def test_explain_simple_override():
+    """Test explain method shows configuration source."""
+    merger = ConfigurationMerger()
+    source1 = ConfigSource(name="pack", data={"rate_limit": 10}, precedence=1)
+    source2 = ConfigSource(name="profile", data={"rate_limit": 50}, precedence=2)
+
+    merged = merger.merge(source1, source2)
+    explanation = merger.explain("rate_limit", merged)
+
+    assert "rate_limit = 50" in explanation
+    assert "profile" in explanation
+    assert "override" in explanation
+
+
+def test_explain_nested_key():
+    """Test explain works with nested keys."""
+    merger = ConfigurationMerger()
+    source1 = ConfigSource(
+        name="base",
+        data={"llm": {"options": {"temperature": 0.5}}},
+        precedence=1
+    )
+    source2 = ConfigSource(
+        name="override",
+        data={"llm": {"options": {"temperature": 0.7}}},
+        precedence=2
+    )
+
+    merged = merger.merge(source1, source2)
+    explanation = merger.explain("llm.options.temperature", merged)
+
+    assert "0.7" in explanation
+    assert "override" in explanation

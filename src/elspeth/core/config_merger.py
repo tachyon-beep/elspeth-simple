@@ -157,3 +157,43 @@ class ConfigurationMerger:
                 # Override scalar values or non-dict types
                 result[key] = value
         return result
+
+    def explain(self, key: str, merged_config: dict[str, Any]) -> str:
+        """Explain why a configuration value is what it is.
+
+        Args:
+            key: Configuration key (e.g., "rate_limit" or "llm.options.temperature")
+            merged_config: The merged configuration dictionary
+
+        Returns:
+            Explanation string showing source and precedence
+
+        Example:
+            >>> merger.explain("rate_limit", config)
+            "rate_limit = 50
+             Source: profile
+             Strategy: override"
+        """
+        # Handle nested keys (e.g., "llm.options.temperature")
+        keys = key.split(".")
+        value = merged_config
+        for k in keys:
+            if isinstance(value, dict) and k in value:
+                value = value[k]
+            else:
+                return f"{key} = <not found>"
+
+        # Find trace entry for this key
+        relevant_traces = [t for t in self._merge_trace if t["key"] == keys[0]]
+
+        if not relevant_traces:
+            return f"{key} = {value}\nSource: <unknown>"
+
+        # Get the last trace (highest precedence)
+        last_trace = relevant_traces[-1]
+
+        explanation = f"{key} = {value}\n"
+        explanation += f"Source: {last_trace['source']}\n"
+        explanation += f"Strategy: {last_trace['strategy']}"
+
+        return explanation

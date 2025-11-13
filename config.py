@@ -8,10 +8,10 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from dmp.core.orchestrator import OrchestratorConfig
+from dmp.core.orchestrator import SDAConfig
 from dmp.core.registry import registry
 from dmp.core.controls import create_rate_limiter, create_cost_tracker
-from dmp.core.experiments.plugin_registry import normalize_early_stop_definitions
+from dmp.core.sda.plugin_registry import normalize_early_stop_definitions
 
 
 @dataclass
@@ -19,7 +19,7 @@ class Settings:
     datasource: Any
     llm: Any
     sinks: Any
-    orchestrator_config: OrchestratorConfig
+    orchestrator_config: SDAConfig
     suite_root: Path | None = None
     suite_defaults: Dict[str, Any] = field(default_factory=dict)
     rate_limiter: Any | None = None
@@ -51,8 +51,8 @@ def load_settings(path: str | Path, profile: str = "default") -> Settings:
     llm_cfg = profile_data["llm"]
     llm = registry.create_llm(llm_cfg["plugin"], llm_cfg.get("options", {}))
 
-    row_plugin_defs: List[Dict[str, Any]] = profile_data.get("row_plugins", [])
-    aggregator_plugin_defs: List[Dict[str, Any]] = profile_data.get("aggregator_plugins", [])
+    transform_plugin_defs: List[Dict[str, Any]] = profile_data.get("row_plugins", [])
+    aggregation_transform_defs: List[Dict[str, Any]] = profile_data.get("aggregator_plugins", [])
     baseline_plugin_defs: List[Dict[str, Any]] = profile_data.get("baseline_plugins", [])
     sink_defs: List[Dict[str, Any]] = profile_data.get("sinks", [])
     rate_limiter_def = profile_data.get("rate_limiter")
@@ -60,10 +60,10 @@ def load_settings(path: str | Path, profile: str = "default") -> Settings:
     llm_middleware_defs: List[Dict[str, Any]] = profile_data.get("llm_middlewares", [])
     prompt_defaults = profile_data.get("prompt_defaults")
     concurrency_config = profile_data.get("concurrency")
-    early_stop_config = profile_data.get("early_stop")
-    early_stop_plugin_defs = normalize_early_stop_definitions(profile_data.get("early_stop_plugins")) or []
-    if not early_stop_plugin_defs and early_stop_config:
-        early_stop_plugin_defs = normalize_early_stop_definitions(early_stop_config)
+    halt_condition_config = profile_data.get("early_stop")
+    halt_condition_plugin_defs = normalize_early_stop_definitions(profile_data.get("early_stop_plugins")) or []
+    if not halt_condition_plugin_defs and halt_condition_config:
+        halt_condition_plugin_defs = normalize_early_stop_definitions(halt_condition_config)
 
     prompts = profile_data.get("prompts", {})
     prompt_fields = profile_data.get("prompt_fields")
@@ -77,8 +77,8 @@ def load_settings(path: str | Path, profile: str = "default") -> Settings:
             prompt_fields = pack.get("prompt_fields")
         if not criteria:
             criteria = pack.get("criteria")
-        row_plugin_defs = list(pack.get("row_plugins", [])) + row_plugin_defs
-        aggregator_plugin_defs = list(pack.get("aggregator_plugins", [])) + aggregator_plugin_defs
+        transform_plugin_defs = list(pack.get("row_plugins", [])) + transform_plugin_defs
+        aggregation_transform_defs = list(pack.get("aggregator_plugins", [])) + aggregation_transform_defs
         baseline_plugin_defs = list(pack.get("baseline_plugins", [])) + baseline_plugin_defs
         llm_middleware_defs = list(pack.get("llm_middlewares", [])) + llm_middleware_defs
         if not sink_defs:
@@ -95,20 +95,20 @@ def load_settings(path: str | Path, profile: str = "default") -> Settings:
         if not pack_early_stop_defs and pack.get("early_stop"):
             pack_early_stop_defs = normalize_early_stop_definitions(pack.get("early_stop"))
         if pack_early_stop_defs:
-            early_stop_plugin_defs = pack_early_stop_defs + early_stop_plugin_defs
+            halt_condition_plugin_defs = pack_early_stop_defs + halt_condition_plugin_defs
 
     sinks = [registry.create_sink(item["plugin"], item.get("options", {})) for item in sink_defs]
 
     rate_limiter = create_rate_limiter(rate_limiter_def)
     cost_tracker = create_cost_tracker(cost_tracker_def)
 
-    orchestrator_config = OrchestratorConfig(
+    orchestrator_config = SDAConfig(
         llm_prompt=prompts,
         prompt_fields=prompt_fields,
         prompt_aliases=prompt_aliases,
         criteria=criteria,
-        row_plugin_defs=row_plugin_defs,
-        aggregator_plugin_defs=aggregator_plugin_defs,
+        transform_plugin_defs=transform_plugin_defs,
+        aggregation_transform_defs=aggregation_transform_defs,
         baseline_plugin_defs=baseline_plugin_defs,
         sink_defs=sink_defs,
         prompt_pack=prompt_pack_name,
@@ -117,8 +117,8 @@ def load_settings(path: str | Path, profile: str = "default") -> Settings:
         llm_middleware_defs=llm_middleware_defs,
         prompt_defaults=prompt_defaults,
         concurrency_config=concurrency_config,
-        early_stop_config=early_stop_config,
-        early_stop_plugin_defs=early_stop_plugin_defs or None,
+        halt_condition_config=halt_condition_config,
+        halt_condition_plugin_defs=halt_condition_plugin_defs or None,
     )
 
     suite_root = profile_data.get("suite_root")

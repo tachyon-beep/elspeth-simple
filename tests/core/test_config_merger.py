@@ -220,3 +220,343 @@ default:
 
     finally:
         Path(config_path).unlink()
+
+
+def test_plugin_accumulation_across_precedence_levels():
+    """Integration test: Verify plugins accumulate across all precedence levels.
+
+    This test verifies Critical Issue #1 fix - all plugin key variants
+    should use APPEND strategy to accumulate plugins from all sources.
+    """
+    merger = ConfigurationMerger()
+
+    # Simulate 5-level precedence chain
+    system_defaults = ConfigSource(
+        name="system_defaults",
+        data={
+            "row_plugins": [{"name": "system_row_plugin"}],
+            "aggregator_plugins": [{"name": "system_agg_plugin"}],
+            "baseline_plugins": [{"name": "system_baseline_plugin"}],
+            "sinks": [{"plugin": "system_sink"}],
+            "llm_middlewares": [{"name": "system_middleware"}],
+        },
+        precedence=1
+    )
+
+    prompt_pack = ConfigSource(
+        name="prompt_pack",
+        data={
+            "row_plugins": [{"name": "pack_row_plugin"}],
+            "aggregator_plugins": [{"name": "pack_agg_plugin"}],
+        },
+        precedence=2
+    )
+
+    profile = ConfigSource(
+        name="profile",
+        data={
+            "row_plugins": [{"name": "profile_row_plugin"}],
+            "sinks": [{"plugin": "profile_sink"}],
+        },
+        precedence=3
+    )
+
+    suite_defaults = ConfigSource(
+        name="suite_defaults",
+        data={
+            "row_plugins": [{"name": "suite_row_plugin"}],
+            "baseline_plugins": [{"name": "suite_baseline_plugin"}],
+        },
+        precedence=4
+    )
+
+    experiment = ConfigSource(
+        name="experiment",
+        data={
+            "row_plugins": [{"name": "exp_row_plugin"}],
+            "llm_middlewares": [{"name": "exp_middleware"}],
+        },
+        precedence=5
+    )
+
+    # Merge all sources
+    result = merger.merge(system_defaults, prompt_pack, profile, suite_defaults, experiment)
+
+    # Verify plugins accumulated in precedence order
+    assert result["row_plugins"] == [
+        {"name": "system_row_plugin"},
+        {"name": "pack_row_plugin"},
+        {"name": "profile_row_plugin"},
+        {"name": "suite_row_plugin"},
+        {"name": "exp_row_plugin"},
+    ]
+
+    assert result["aggregator_plugins"] == [
+        {"name": "system_agg_plugin"},
+        {"name": "pack_agg_plugin"},
+    ]
+
+    assert result["baseline_plugins"] == [
+        {"name": "system_baseline_plugin"},
+        {"name": "suite_baseline_plugin"},
+    ]
+
+    assert result["sinks"] == [
+        {"plugin": "system_sink"},
+        {"plugin": "profile_sink"},
+    ]
+
+    assert result["llm_middlewares"] == [
+        {"name": "system_middleware"},
+        {"name": "exp_middleware"},
+    ]
+
+
+def test_plugin_defs_variant_names_accumulate():
+    """Test that normalized plugin def names also accumulate (e.g., row_plugin_defs).
+
+    This test verifies that the *_defs variant names are also registered
+    in MERGE_STRATEGIES and accumulate correctly.
+    """
+    merger = ConfigurationMerger()
+
+    source1 = ConfigSource(
+        name="base",
+        data={
+            "row_plugin_defs": [{"name": "plugin1"}],
+            "transform_plugin_defs": [{"name": "transform1"}],
+            "aggregator_plugin_defs": [{"name": "agg1"}],
+            "aggregation_transform_defs": [{"name": "agg_transform1"}],
+            "baseline_plugin_defs": [{"name": "baseline1"}],
+            "sink_defs": [{"plugin": "sink1"}],
+            "llm_middleware_defs": [{"name": "middleware1"}],
+            "early_stop_plugin_defs": [{"name": "early_stop1"}],
+            "halt_condition_plugin_defs": [{"name": "halt1"}],
+        },
+        precedence=1
+    )
+
+    source2 = ConfigSource(
+        name="override",
+        data={
+            "row_plugin_defs": [{"name": "plugin2"}],
+            "transform_plugin_defs": [{"name": "transform2"}],
+            "aggregator_plugin_defs": [{"name": "agg2"}],
+            "aggregation_transform_defs": [{"name": "agg_transform2"}],
+            "baseline_plugin_defs": [{"name": "baseline2"}],
+            "sink_defs": [{"plugin": "sink2"}],
+            "llm_middleware_defs": [{"name": "middleware2"}],
+            "early_stop_plugin_defs": [{"name": "early_stop2"}],
+            "halt_condition_plugin_defs": [{"name": "halt2"}],
+        },
+        precedence=2
+    )
+
+    result = merger.merge(source1, source2)
+
+    # Verify all *_defs variants accumulated (not overridden)
+    assert result["row_plugin_defs"] == [{"name": "plugin1"}, {"name": "plugin2"}]
+    assert result["transform_plugin_defs"] == [{"name": "transform1"}, {"name": "transform2"}]
+    assert result["aggregator_plugin_defs"] == [{"name": "agg1"}, {"name": "agg2"}]
+    assert result["aggregation_transform_defs"] == [{"name": "agg_transform1"}, {"name": "agg_transform2"}]
+    assert result["baseline_plugin_defs"] == [{"name": "baseline1"}, {"name": "baseline2"}]
+    assert result["sink_defs"] == [{"plugin": "sink1"}, {"plugin": "sink2"}]
+    assert result["llm_middleware_defs"] == [{"name": "middleware1"}, {"name": "middleware2"}]
+    assert result["early_stop_plugin_defs"] == [{"name": "early_stop1"}, {"name": "early_stop2"}]
+    assert result["halt_condition_plugin_defs"] == [{"name": "halt1"}, {"name": "halt2"}]
+
+
+def test_suite_defaults_merging_with_prompt_packs():
+    """Integration test: Suite defaults merge with prompt pack plugins.
+
+    Verifies that suite defaults (precedence=4) correctly merge with
+    prompt pack (precedence=2), accumulating plugins from both.
+    """
+    merger = ConfigurationMerger()
+
+    prompt_pack = ConfigSource(
+        name="prompt_pack",
+        data={
+            "row_plugins": [{"name": "pack_plugin1"}, {"name": "pack_plugin2"}],
+            "aggregator_plugins": [{"name": "pack_agg1"}],
+            "prompts": {"system": "Pack system prompt"},
+        },
+        precedence=2
+    )
+
+    suite_defaults = ConfigSource(
+        name="suite_defaults",
+        data={
+            "row_plugins": [{"name": "suite_plugin1"}],
+            "aggregator_plugins": [{"name": "suite_agg1"}, {"name": "suite_agg2"}],
+            "prompts": {"user": "Suite user prompt"},
+        },
+        precedence=4
+    )
+
+    result = merger.merge(prompt_pack, suite_defaults)
+
+    # Verify plugins accumulated
+    assert result["row_plugins"] == [
+        {"name": "pack_plugin1"},
+        {"name": "pack_plugin2"},
+        {"name": "suite_plugin1"},
+    ]
+
+    assert result["aggregator_plugins"] == [
+        {"name": "pack_agg1"},
+        {"name": "suite_agg1"},
+        {"name": "suite_agg2"},
+    ]
+
+    # Verify prompts deep merged
+    assert result["prompts"] == {
+        "system": "Pack system prompt",
+        "user": "Suite user prompt",
+    }
+
+
+def test_full_five_level_precedence_chain():
+    """Integration test: Complete 5-level precedence chain with mixed strategies.
+
+    Tests the full merge chain:
+    1. System defaults (precedence=1)
+    2. Prompt pack (precedence=2)
+    3. Profile (precedence=3)
+    4. Suite defaults (precedence=4)
+    5. Experiment config (precedence=5)
+
+    Verifies APPEND, OVERRIDE, and DEEP_MERGE strategies all work correctly.
+    """
+    merger = ConfigurationMerger()
+
+    system_defaults = ConfigSource(
+        name="system_defaults",
+        data={
+            "rate_limit": 10,
+            "row_plugins": [{"name": "system_plugin"}],
+            "llm": {
+                "plugin": "mock",
+                "options": {"temperature": 0.5, "max_tokens": 100}
+            },
+        },
+        precedence=1
+    )
+
+    prompt_pack = ConfigSource(
+        name="prompt_pack",
+        data={
+            "row_plugins": [{"name": "pack_plugin"}],
+            "llm": {
+                "options": {"temperature": 0.7}  # Override temperature
+            },
+            "prompts": {"system": "System prompt from pack"},
+        },
+        precedence=2
+    )
+
+    profile = ConfigSource(
+        name="profile",
+        data={
+            "rate_limit": 50,  # Override from system
+            "row_plugins": [{"name": "profile_plugin"}],
+            "llm": {
+                "plugin": "azure_openai",  # Override from system
+                "options": {"max_tokens": 200}  # Override from system
+            },
+            "prompts": {"user": "User prompt from profile"},
+        },
+        precedence=3
+    )
+
+    suite_defaults = ConfigSource(
+        name="suite_defaults",
+        data={
+            "row_plugins": [{"name": "suite_plugin"}],
+            "sinks": [{"plugin": "csv"}],
+        },
+        precedence=4
+    )
+
+    experiment = ConfigSource(
+        name="experiment",
+        data={
+            "rate_limit": 100,  # Final override
+            "row_plugins": [{"name": "exp_plugin"}],
+            "llm": {
+                "options": {"temperature": 0.9}  # Final override
+            },
+        },
+        precedence=5
+    )
+
+    result = merger.merge(system_defaults, prompt_pack, profile, suite_defaults, experiment)
+
+    # Verify OVERRIDE strategy: highest precedence wins
+    assert result["rate_limit"] == 100
+
+    # Verify APPEND strategy: accumulate from all sources in precedence order
+    assert result["row_plugins"] == [
+        {"name": "system_plugin"},
+        {"name": "pack_plugin"},
+        {"name": "profile_plugin"},
+        {"name": "suite_plugin"},
+        {"name": "exp_plugin"},
+    ]
+
+    assert result["sinks"] == [{"plugin": "csv"}]
+
+    # Verify DEEP_MERGE strategy: nested dicts merge recursively
+    assert result["llm"] == {
+        "plugin": "azure_openai",  # From profile (overrides system mock)
+        "options": {
+            "temperature": 0.9,  # From experiment (final override)
+            "max_tokens": 200,   # From profile (overrides system 100)
+        }
+    }
+
+    assert result["prompts"] == {
+        "system": "System prompt from pack",
+        "user": "User prompt from profile",
+    }
+
+    # Verify trace shows correct sources
+    explanation = merger.explain("rate_limit", result)
+    assert "experiment" in explanation
+    assert "100" in explanation
+
+
+def test_mixed_base_and_normalized_plugin_names():
+    """Test that mixing base names (row_plugins) and normalized names (row_plugin_defs) works.
+
+    In real usage, different precedence levels may use different naming conventions.
+    This test verifies they can coexist and accumulate correctly.
+    """
+    merger = ConfigurationMerger()
+
+    source1 = ConfigSource(
+        name="base",
+        data={
+            "row_plugins": [{"name": "plugin1"}],  # Base name
+            "aggregator_plugin_defs": [{"name": "agg1"}],  # Normalized name
+        },
+        precedence=1
+    )
+
+    source2 = ConfigSource(
+        name="override",
+        data={
+            "row_plugin_defs": [{"name": "plugin2"}],  # Normalized name
+            "aggregator_plugins": [{"name": "agg2"}],  # Base name
+        },
+        precedence=2
+    )
+
+    result = merger.merge(source1, source2)
+
+    # Both row_plugins and row_plugin_defs should accumulate separately
+    # (they are different keys in the config)
+    assert result["row_plugins"] == [{"name": "plugin1"}]
+    assert result["row_plugin_defs"] == [{"name": "plugin2"}]
+    assert result["aggregator_plugin_defs"] == [{"name": "agg1"}]
+    assert result["aggregator_plugins"] == [{"name": "agg2"}]

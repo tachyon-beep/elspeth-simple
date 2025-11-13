@@ -41,13 +41,24 @@ class ConfigurationMerger:
 
     # Define merge strategies for known keys
     MERGE_STRATEGIES: ClassVar[dict[str, MergeStrategy]] = {
-        # Lists use APPEND strategy
+        # Lists use APPEND strategy - add all variants (base and normalized names)
         "row_plugins": MergeStrategy.APPEND,
+        "row_plugin_defs": MergeStrategy.APPEND,
+        "transform_plugin_defs": MergeStrategy.APPEND,
+        "transform_plugins": MergeStrategy.APPEND,
         "aggregator_plugins": MergeStrategy.APPEND,
+        "aggregator_plugin_defs": MergeStrategy.APPEND,
+        "aggregation_transform_defs": MergeStrategy.APPEND,
         "baseline_plugins": MergeStrategy.APPEND,
+        "baseline_plugin_defs": MergeStrategy.APPEND,
         "llm_middlewares": MergeStrategy.APPEND,
+        "llm_middleware_defs": MergeStrategy.APPEND,
         "sinks": MergeStrategy.APPEND,
+        "sink_defs": MergeStrategy.APPEND,
         "early_stop_plugins": MergeStrategy.APPEND,
+        "early_stop_plugin_defs": MergeStrategy.APPEND,
+        "halt_condition_plugins": MergeStrategy.APPEND,
+        "halt_condition_plugin_defs": MergeStrategy.APPEND,
 
         # Nested dicts use DEEP_MERGE
         "llm": MergeStrategy.DEEP_MERGE,

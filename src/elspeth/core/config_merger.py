@@ -39,9 +39,32 @@ class ConfigurationMerger:
     - Nested dicts (llm.options, datasource.options): DEEP_MERGE
     """
 
+    # Define merge strategies for known keys
+    MERGE_STRATEGIES = {
+        # Lists use APPEND strategy
+        "row_plugins": MergeStrategy.APPEND,
+        "aggregator_plugins": MergeStrategy.APPEND,
+        "baseline_plugins": MergeStrategy.APPEND,
+        "llm_middlewares": MergeStrategy.APPEND,
+        "sinks": MergeStrategy.APPEND,
+        "early_stop_plugins": MergeStrategy.APPEND,
+
+        # Nested dicts use DEEP_MERGE
+        "llm": MergeStrategy.DEEP_MERGE,
+        "datasource": MergeStrategy.DEEP_MERGE,
+        "orchestrator": MergeStrategy.DEEP_MERGE,
+        "concurrency": MergeStrategy.DEEP_MERGE,
+        "retry": MergeStrategy.DEEP_MERGE,
+        "checkpoint": MergeStrategy.DEEP_MERGE,
+        "early_stop": MergeStrategy.DEEP_MERGE,
+        "prompts": MergeStrategy.DEEP_MERGE,
+
+        # All other keys: OVERRIDE (default)
+    }
+
     def __init__(self):
-        """Initialize merger."""
-        pass
+        """Initialize merger with empty trace."""
+        self._merge_trace: List[Dict[str, Any]] = []
 
     def merge(self, *sources: ConfigSource) -> Dict[str, Any]:
         """Merge configuration sources with defined precedence.
@@ -52,7 +75,39 @@ class ConfigurationMerger:
         Returns:
             Merged configuration dictionary
         """
-        # For now, just return data from first source
-        if sources:
-            return dict(sources[0].data)
-        return {}
+        # Sort by precedence (lowest first)
+        sorted_sources = sorted(sources, key=lambda s: s.precedence)
+
+        merged = {}
+        self._merge_trace = []  # Reset trace
+
+        for source in sorted_sources:
+            merged = self._merge_source(merged, source)
+
+        return merged
+
+    def _merge_source(self, base: Dict, source: ConfigSource) -> Dict:
+        """Merge single source into base configuration.
+
+        Args:
+            base: Base configuration dictionary
+            source: Configuration source to merge
+
+        Returns:
+            Merged configuration dictionary
+        """
+        result = base.copy()
+
+        for key, value in source.data.items():
+            strategy = self.MERGE_STRATEGIES.get(key, MergeStrategy.OVERRIDE)
+
+            if strategy == MergeStrategy.OVERRIDE:
+                result[key] = value
+                self._merge_trace.append({
+                    "key": key,
+                    "strategy": "override",
+                    "source": source.name,
+                    "value": value
+                })
+
+        return result

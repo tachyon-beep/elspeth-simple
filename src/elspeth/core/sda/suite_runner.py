@@ -22,6 +22,7 @@ from elspeth.core.llm.registry import create_middleware
 from elspeth.core import registry as core_registry
 from elspeth.core.security import resolve_security_level
 from elspeth.core.validation import ConfigurationError
+from elspeth.core.config_merger import ConfigurationMerger, ConfigSource
 
 
 @dataclass
@@ -37,116 +38,108 @@ class SDASuiteRunner:
         defaults: Dict[str, Any],
         sinks: List[ResultSink],
     ) -> SDARunner:
+        """Build runner for single experiment with merged configuration.
+
+        Merging precedence:
+        1. defaults (from Settings)
+        2. prompt_pack (if specified)
+        3. config (experiment-specific)
+        """
+        merger = ConfigurationMerger()
+
+        # Build sources in precedence order
+        sources = []
+
+        # Source 1: defaults
+        sources.append(ConfigSource(name="defaults", data=defaults, precedence=1))
+
+        # Source 2: prompt pack (if specified)
         prompt_packs = defaults.get("prompt_packs", {})
         pack_name = config.prompt_pack or defaults.get("prompt_pack")
-        pack = prompt_packs.get(pack_name) if pack_name else None
+        if pack_name and pack_name in prompt_packs:
+            pack = prompt_packs[pack_name]
+            sources.append(ConfigSource(name="prompt_pack", data=pack, precedence=2))
 
-        prompt_system = config.prompt_system or defaults.get("prompt_system", "")
-        prompt_template = config.prompt_template or defaults.get("prompt_template", "")
-        prompt_fields = config.prompt_fields or defaults.get("prompt_fields")
-        criteria = config.criteria or defaults.get("criteria")
-        prompt_defaults: Dict[str, Any] = {}
-        for source in (
-            defaults.get("prompt_defaults"),
-            pack.get("prompt_defaults") if pack else None,
-            config.prompt_defaults,
-        ):
-            if source:
-                prompt_defaults.update(source)
-        if not prompt_defaults:
-            prompt_defaults = {}
+        # Source 3: experiment config
+        config_data = {
+            k: v for k, v in config.__dict__.items()
+            if v is not None and not k.startswith('_')
+        }
+        sources.append(ConfigSource(name="experiment", data=config_data, precedence=3))
 
-        middleware_defs: list[Dict[str, Any]] = []
-        for source in (
-            defaults.get("llm_middleware_defs") or defaults.get("llm_middlewares"),
-            pack.get("llm_middlewares") if pack else None,
-            config.llm_middleware_defs,
-        ):
-            if source:
-                middleware_defs.extend(source)
+        # Merge all sources
+        merged = merger.merge(*sources)
+
+        # Extract merged values with fallbacks
+        prompt_system = merged.get("prompt_system", "")
+        prompt_template = merged.get("prompt_template", "")
+
+        # Handle prompts dict format
+        if prompts := merged.get("prompts"):
+            prompt_system = prompt_system or prompts.get("system", "")
+            prompt_template = prompt_template or prompts.get("user", "")
+
+        prompt_fields = merged.get("prompt_fields")
+        criteria = merged.get("criteria")
+        prompt_defaults = merged.get("prompt_defaults", {})
+        concurrency_config = merged.get("concurrency_config") or merged.get("concurrency")
+        halt_condition_config = merged.get("halt_condition_config") or merged.get("early_stop")
+
+        # Handle middlewares (appended by merger)
+        middleware_defs = merged.get("llm_middleware_defs", []) or merged.get("llm_middlewares", [])
         middlewares = self._create_middlewares(middleware_defs)
 
-        concurrency_config: Dict[str, Any] = {}
-        for source in (
-            defaults.get("concurrency_config") or defaults.get("concurrency"),
-            pack.get("concurrency") if pack else None,
-            config.concurrency_config,
-        ):
-            if source:
-                concurrency_config.update(source)
-        if not concurrency_config:
-            concurrency_config = None
-
-        halt_condition_plugin_defs: List[Dict[str, Any]] = []
-        for source in (
-            defaults.get("halt_condition_plugin_defs") or defaults.get("halt_condition_plugins"),
-            pack.get("halt_condition_plugins") if pack else None,
-            config.halt_condition_plugin_defs,
-        ):
-            if source:
-                halt_condition_plugin_defs.extend(normalize_halt_condition_definitions(source))
-
-        halt_condition_config: Dict[str, Any] = {}
-        for source in (
-            defaults.get("halt_condition_config") or defaults.get("early_stop"),
-            pack.get("early_stop") if pack else None,
-            config.halt_condition_config,
-        ):
-            if source:
-                halt_condition_config.update(source)
-        if not halt_condition_config:
-            halt_condition_config = None
+        # Handle halt condition plugins (appended by merger)
+        halt_condition_plugin_defs = merged.get("halt_condition_plugin_defs", []) or merged.get("halt_condition_plugins", [])
+        if halt_condition_plugin_defs:
+            halt_condition_plugin_defs = normalize_halt_condition_definitions(halt_condition_plugin_defs)
         if not halt_condition_plugin_defs and halt_condition_config:
-            halt_condition_plugin_defs.extend(normalize_halt_condition_definitions(halt_condition_config))
+            halt_condition_plugin_defs = normalize_halt_condition_definitions(halt_condition_config)
         halt_condition_plugins = (
-            [create_halt_condition_plugin(defn) for defn in halt_condition_plugin_defs] if halt_condition_plugin_defs else None
+            [create_halt_condition_plugin(defn) for defn in halt_condition_plugin_defs]
+            if halt_condition_plugin_defs else None
         )
 
+        # Security level resolution (still uses special resolution logic)
+        pack = prompt_packs.get(pack_name) if pack_name and pack_name in prompt_packs else None
         security_level = resolve_security_level(
             config.security_level,
             (pack.get("security_level") if pack else None),
             defaults.get("security_level"),
         )
 
-        row_defs = list(defaults.get("transform_plugin_defs", []))
-        if pack and pack.get("transform_plugins"):
-            row_defs = list(pack.get("transform_plugins", [])) + row_defs
-        if config.transform_plugin_defs:
-            row_defs += config.transform_plugin_defs
-        transform_plugins = [create_transform_plugin(defn) for defn in row_defs] if row_defs else None
+        # Transform plugins (appended by merger)
+        transform_plugin_defs = (
+            merged.get("transform_plugin_defs", [])
+            or merged.get("row_plugins", [])
+            or merged.get("transform_plugins", [])
+        )
+        transform_plugins = (
+            [create_transform_plugin(defn) for defn in transform_plugin_defs]
+            if transform_plugin_defs else None
+        )
 
-        agg_defs = list(defaults.get("aggregation_transform_defs", []))
-        if pack and pack.get("aggregation_transforms"):
-            agg_defs = list(pack.get("aggregation_transforms", [])) + agg_defs
-        if config.aggregation_transform_defs:
-            agg_defs += config.aggregation_transform_defs
-        aggregation_transforms = [create_aggregation_transform(defn) for defn in agg_defs] if agg_defs else None
+        # Aggregation transforms (appended by merger)
+        aggregation_transform_defs = (
+            merged.get("aggregation_transform_defs", [])
+            or merged.get("aggregator_plugins", [])
+            or merged.get("aggregation_transforms", [])
+        )
+        aggregation_transforms = (
+            [create_aggregation_transform(defn) for defn in aggregation_transform_defs]
+            if aggregation_transform_defs else None
+        )
 
-        rate_limiter = defaults.get("rate_limiter")
-        if defaults.get("rate_limiter_def"):
-            rate_limiter = create_rate_limiter(defaults["rate_limiter_def"])
-        if pack and pack.get("rate_limiter"):
-            rate_limiter = create_rate_limiter(pack["rate_limiter"])
-        if config.rate_limiter_def:
-            rate_limiter = create_rate_limiter(config.rate_limiter_def)
+        # Rate limiter and cost tracker (override strategy)
+        rate_limiter = merged.get("rate_limiter")
+        if merged.get("rate_limiter_def"):
+            rate_limiter = create_rate_limiter(merged["rate_limiter_def"])
 
-        cost_tracker = defaults.get("cost_tracker")
-        if defaults.get("cost_tracker_def"):
-            cost_tracker = create_cost_tracker(defaults["cost_tracker_def"])
-        if pack and pack.get("cost_tracker"):
-            cost_tracker = create_cost_tracker(pack["cost_tracker"])
-        if config.cost_tracker_def:
-            cost_tracker = create_cost_tracker(config.cost_tracker_def)
+        cost_tracker = merged.get("cost_tracker")
+        if merged.get("cost_tracker_def"):
+            cost_tracker = create_cost_tracker(merged["cost_tracker_def"])
 
-        if pack:
-            pack_prompts = pack.get("prompts", {})
-            prompt_system = prompt_system or pack_prompts.get("system", "")
-            prompt_template = prompt_template or pack_prompts.get("user", "")
-            if not prompt_fields:
-                prompt_fields = pack.get("prompt_fields")
-            if not criteria:
-                criteria = pack.get("criteria")
-
+        # Validate required prompts
         if not (prompt_system or "").strip():
             raise ConfigurationError(
                 f"Experiment '{config.name}' has no system prompt defined. Provide one in the experiment, defaults, or prompt pack."

@@ -169,3 +169,54 @@ def test_explain_nested_key():
 
     assert "0.7" in explanation
     assert "override" in explanation
+
+
+def test_config_load_uses_merger():
+    """Integration test: config.py uses ConfigurationMerger."""
+    from elspeth.config import load_settings
+    from pathlib import Path
+    import tempfile
+
+    # Create temporary config file
+    config_yaml = """
+default:
+  datasource:
+    plugin: local_csv
+    options:
+      path: test.csv
+  llm:
+    plugin: mock
+  prompt_packs:
+    test_pack:
+      prompts:
+        system: "Test system prompt"
+      row_plugins:
+        - name: plugin1
+  prompt_pack: test_pack
+  prompts:
+    user: "Profile user prompt"
+  row_plugins:
+    - name: plugin2
+  sinks: []
+"""
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        f.write(config_yaml)
+        config_path = f.name
+
+    try:
+        settings = load_settings(config_path, profile="default")
+
+        # Verify prompt pack prompts are merged
+        assert settings.orchestrator_config.llm_prompt.get("system") == "Test system prompt"
+        assert settings.orchestrator_config.llm_prompt.get("user") == "Profile user prompt"
+
+        # Verify plugins are appended (pack plugins + profile plugins)
+        plugin_names = [p["name"] for p in settings.orchestrator_config.transform_plugin_defs]
+        assert "plugin1" in plugin_names  # From pack
+        assert "plugin2" in plugin_names  # From profile
+        # Pack plugins should come first
+        assert plugin_names.index("plugin1") < plugin_names.index("plugin2")
+
+    finally:
+        Path(config_path).unlink()

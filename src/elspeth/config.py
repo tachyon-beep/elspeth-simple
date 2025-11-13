@@ -12,6 +12,7 @@ from elspeth.core.orchestrator import SDAConfig
 from elspeth.core.registry import registry
 from elspeth.core.controls import create_rate_limiter, create_cost_tracker
 from elspeth.core.sda.plugin_registry import normalize_halt_condition_definitions
+from elspeth.core.config_merger import ConfigurationMerger, ConfigSource
 
 
 @dataclass
@@ -28,13 +29,16 @@ class Settings:
     prompt_pack: Optional[str] = None
 
 
-def _merge_pack(base: Dict[str, Any], pack: Dict[str, Any]) -> Dict[str, Any]:
-    merged = dict(pack)
-    merged.update(base)
-    return merged
-
-
 def load_settings(path: str | Path, profile: str = "default") -> Settings:
+    """Load settings from YAML configuration file.
+
+    Uses ConfigurationMerger for consistent precedence:
+    1. System defaults (if any)
+    2. Prompt pack
+    3. Profile
+    4. Suite defaults
+    5. Experiment config (handled by suite_runner)
+    """
     config_path = Path(path)
     data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     profile_data = dict(data.get(profile, {}))
@@ -43,64 +47,64 @@ def load_settings(path: str | Path, profile: str = "default") -> Settings:
     prompt_pack_name = profile_data.get("prompt_pack")
     pack = prompt_packs.get(prompt_pack_name) if prompt_pack_name else None
 
-    datasource_cfg = profile_data["datasource"]
+    # Use ConfigurationMerger for prompt pack merging
+    merger = ConfigurationMerger()
+
+    # Merge pack config into profile config
+    if pack:
+        pack_source = ConfigSource(name="prompt_pack", data=pack, precedence=2)
+        profile_source = ConfigSource(name="profile", data=profile_data, precedence=3)
+        merged_config = merger.merge(pack_source, profile_source)
+    else:
+        merged_config = profile_data
+
+    # Extract merged values
+    datasource_cfg = merged_config["datasource"]
     datasource = registry.create_datasource(
         datasource_cfg["plugin"], datasource_cfg.get("options", {})
     )
 
-    llm_cfg = profile_data["llm"]
+    llm_cfg = merged_config["llm"]
     llm = registry.create_llm(llm_cfg["plugin"], llm_cfg.get("options", {}))
 
-    transform_plugin_defs: List[Dict[str, Any]] = profile_data.get("row_plugins", [])
-    aggregation_transform_defs: List[Dict[str, Any]] = profile_data.get("aggregator_plugins", [])
-    baseline_plugin_defs: List[Dict[str, Any]] = profile_data.get("baseline_plugins", [])
-    sink_defs: List[Dict[str, Any]] = profile_data.get("sinks", [])
-    rate_limiter_def = profile_data.get("rate_limiter")
-    cost_tracker_def = profile_data.get("cost_tracker")
-    llm_middleware_defs: List[Dict[str, Any]] = profile_data.get("llm_middlewares", [])
-    prompt_defaults = profile_data.get("prompt_defaults")
-    concurrency_config = profile_data.get("concurrency")
-    halt_condition_config = profile_data.get("early_stop")
-    halt_condition_plugin_defs = normalize_halt_condition_definitions(profile_data.get("early_stop_plugins")) or []
+    # Plugins are now properly appended by merger
+    transform_plugin_defs = merged_config.get("row_plugins", [])
+    aggregation_transform_defs = merged_config.get("aggregator_plugins", [])
+    baseline_plugin_defs = merged_config.get("baseline_plugins", [])
+    sink_defs = merged_config.get("sinks", [])
+    llm_middleware_defs = merged_config.get("llm_middlewares", [])
+
+    # Other config extraction
+    rate_limiter_def = merged_config.get("rate_limiter")
+    cost_tracker_def = merged_config.get("cost_tracker")
+    prompt_defaults = merged_config.get("prompt_defaults")
+    concurrency_config = merged_config.get("concurrency")
+    halt_condition_config = merged_config.get("early_stop")
+    halt_condition_plugin_defs = normalize_halt_condition_definitions(
+        merged_config.get("early_stop_plugins")
+    ) or []
+
     if not halt_condition_plugin_defs and halt_condition_config:
         halt_condition_plugin_defs = normalize_halt_condition_definitions(halt_condition_config)
 
-    prompts = profile_data.get("prompts", {})
-    prompt_fields = profile_data.get("prompt_fields")
-    prompt_aliases = profile_data.get("prompt_aliases")
-    criteria = profile_data.get("criteria")
+    prompts = merged_config.get("prompts", {})
+    prompt_fields = merged_config.get("prompt_fields")
+    prompt_aliases = merged_config.get("prompt_aliases")
+    criteria = merged_config.get("criteria")
 
-    if pack:
-        if pack_prompts := pack.get("prompts"):
-            prompts = _merge_pack(prompts, pack_prompts)
-        if not prompt_fields:
-            prompt_fields = pack.get("prompt_fields")
-        if not criteria:
-            criteria = pack.get("criteria")
-        transform_plugin_defs = list(pack.get("row_plugins", [])) + transform_plugin_defs
-        aggregation_transform_defs = list(pack.get("aggregator_plugins", [])) + aggregation_transform_defs
-        baseline_plugin_defs = list(pack.get("baseline_plugins", [])) + baseline_plugin_defs
-        llm_middleware_defs = list(pack.get("llm_middlewares", [])) + llm_middleware_defs
-        if not sink_defs:
-            sink_defs = pack.get("sinks", [])
-        if not rate_limiter_def and pack.get("rate_limiter"):
-            rate_limiter_def = pack.get("rate_limiter")
-        if not cost_tracker_def and pack.get("cost_tracker"):
-            cost_tracker_def = pack.get("cost_tracker")
-        if not prompt_defaults and pack.get("prompt_defaults"):
-            prompt_defaults = pack.get("prompt_defaults")
-        if not concurrency_config and pack.get("concurrency"):
-            concurrency_config = pack.get("concurrency")
-        pack_early_stop_defs = normalize_halt_condition_definitions(pack.get("early_stop_plugins")) or []
-        if not pack_early_stop_defs and pack.get("early_stop"):
-            pack_early_stop_defs = normalize_halt_condition_definitions(pack.get("early_stop"))
-        if pack_early_stop_defs:
-            halt_condition_plugin_defs = pack_early_stop_defs + halt_condition_plugin_defs
-
+    # Create sinks and controls
     sinks = [registry.create_sink(item["plugin"], item.get("options", {})) for item in sink_defs]
-
     rate_limiter = create_rate_limiter(rate_limiter_def)
     cost_tracker = create_cost_tracker(cost_tracker_def)
+
+    # Handle suite_defaults merging with prompt packs
+    suite_defaults = dict(merged_config.get("suite_defaults", {}))
+    suite_pack_name = suite_defaults.get("prompt_pack")
+    if suite_pack_name and suite_pack_name in prompt_packs:
+        suite_pack = prompt_packs[suite_pack_name]
+        suite_pack_source = ConfigSource(name="suite_prompt_pack", data=suite_pack, precedence=2)
+        suite_source = ConfigSource(name="suite_defaults", data=suite_defaults, precedence=3)
+        suite_defaults = merger.merge(suite_pack_source, suite_source)
 
     orchestrator_config = SDAConfig(
         llm_prompt=prompts,
@@ -112,8 +116,8 @@ def load_settings(path: str | Path, profile: str = "default") -> Settings:
         baseline_plugin_defs=baseline_plugin_defs,
         sink_defs=sink_defs,
         prompt_pack=prompt_pack_name,
-        retry_config=profile_data.get("retry"),
-        checkpoint_config=profile_data.get("checkpoint"),
+        retry_config=merged_config.get("retry"),
+        checkpoint_config=merged_config.get("checkpoint"),
         llm_middleware_defs=llm_middleware_defs,
         prompt_defaults=prompt_defaults,
         concurrency_config=concurrency_config,
@@ -121,29 +125,7 @@ def load_settings(path: str | Path, profile: str = "default") -> Settings:
         halt_condition_plugin_defs=halt_condition_plugin_defs or None,
     )
 
-    suite_root = profile_data.get("suite_root")
-    suite_defaults = dict(profile_data.get("suite_defaults", {}))
-    if suite_defaults.get("prompt_pack"):
-        pack = prompt_packs.get(suite_defaults["prompt_pack"])
-        if pack:
-            suite_defaults.setdefault("prompts", pack.get("prompts"))
-            suite_defaults.setdefault("prompt_fields", pack.get("prompt_fields"))
-            suite_defaults.setdefault("criteria", pack.get("criteria"))
-            suite_defaults.setdefault("row_plugins", pack.get("row_plugins", []))
-            suite_defaults.setdefault("aggregator_plugins", pack.get("aggregator_plugins", []))
-            suite_defaults.setdefault("baseline_plugins", pack.get("baseline_plugins", []))
-            suite_defaults.setdefault("llm_middlewares", pack.get("llm_middlewares", []))
-            suite_defaults.setdefault("sinks", pack.get("sinks", []))
-            if pack.get("rate_limiter"):
-                suite_defaults.setdefault("rate_limiter", pack.get("rate_limiter"))
-            if pack.get("cost_tracker"):
-                suite_defaults.setdefault("cost_tracker", pack.get("cost_tracker"))
-            if pack.get("concurrency"):
-                suite_defaults.setdefault("concurrency", pack.get("concurrency"))
-            if pack.get("early_stop"):
-                suite_defaults.setdefault("early_stop", pack.get("early_stop"))
-            if pack.get("early_stop_plugins"):
-                suite_defaults.setdefault("early_stop_plugins", pack.get("early_stop_plugins"))
+    suite_root = merged_config.get("suite_root")
 
     return Settings(
         datasource=datasource,

@@ -216,7 +216,7 @@ class SDARunner:
 
     def _init_halt_conditions(self) -> None:
         self._early_stop_reason = None
-        plugins: List[EarlyStopPlugin] = []
+        plugins: List[HaltConditionPlugin] = []
 
         if self.halt_condition_plugins:
             plugins = list(self.halt_condition_plugins)
@@ -293,7 +293,7 @@ class SDARunner:
         system_template: PromptTemplate,
         user_template: PromptTemplate,
         criteria_templates: Dict[str, PromptTemplate],
-        transform_plugins: List[RowExperimentPlugin],
+        transform_plugins: List[TransformPlugin],
         context: Dict[str, Any],
         row: pd.Series,
         row_id: str | None,
@@ -380,7 +380,7 @@ class SDARunner:
         system_template: PromptTemplate,
         user_template: PromptTemplate,
         criteria_templates: Dict[str, PromptTemplate],
-        transform_plugins: List[RowExperimentPlugin],
+        transform_plugins: List[TransformPlugin],
         handle_success,
         handle_failure,
         config: Dict[str, Any],

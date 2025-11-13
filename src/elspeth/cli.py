@@ -11,18 +11,18 @@ import argparse
 import json
 import logging
 import os
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Iterable, Any, Dict, Mapping
+from typing import Any
 
 import pandas as pd
 
 from elspeth.config import load_settings
-from elspeth.core.orchestrator import SDAOrchestrator, SDAConfig
-from elspeth.core.sda import SDASuiteRunner, SDASuite
-from elspeth.plugins.outputs.csv_file import CsvResultSink
-from elspeth.core.controls import create_rate_limiter, create_cost_tracker
+from elspeth.core.config_merger import ConfigSource, ConfigurationMerger
+from elspeth.core.orchestrator import SDAOrchestrator
+from elspeth.core.sda import SDASuite, SDASuiteRunner
 from elspeth.core.validation import validate_settings, validate_suite
-from elspeth.core.config_merger import ConfigurationMerger, ConfigSource
+from elspeth.plugins.outputs.csv_file import CsvResultSink
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def load_dotenv() -> None:
         return
 
     try:
-        with open(env_file) as f:
+        with env_file.open() as f:
             for line in f:
                 line = line.strip()
                 # Skip empty lines and comments
@@ -126,7 +126,7 @@ def format_preview(df: pd.DataFrame, head: int) -> str:
         return preview.to_string(index=False)
 
 
-def _flatten_value(target: Dict[str, Any], prefix: str, value: Any) -> None:
+def _flatten_value(target: dict[str, Any], prefix: str, value: Any) -> None:
     if isinstance(value, Mapping):
         for key, inner in value.items():
             next_prefix = f"{prefix}_{key}" if prefix else key
@@ -135,7 +135,7 @@ def _flatten_value(target: Dict[str, Any], prefix: str, value: Any) -> None:
         target[prefix] = value
 
 
-def _result_to_row(record: Dict[str, Any]) -> Dict[str, Any]:
+def _result_to_row(record: dict[str, Any]) -> dict[str, Any]:
     row = dict(record.get("row") or {})
 
     def consume_response(prefix: str, response: Mapping[str, Any] | None) -> None:
@@ -455,7 +455,7 @@ def _configure_sink_dry_run(settings, enable_live: bool) -> None:
 
     for sink in settings.sinks:
         if hasattr(sink, "dry_run"):
-            setattr(sink, "dry_run", dry_run)
+            sink.dry_run = dry_run
 
     def _update_defs(defs):
         if not defs:

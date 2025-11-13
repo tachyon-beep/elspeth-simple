@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 
+from elspeth.core.config_merger import ConfigSource, ConfigurationMerger
+from elspeth.core.controls import create_cost_tracker, create_rate_limiter
 from elspeth.core.orchestrator import SDAConfig
 from elspeth.core.registry import registry
-from elspeth.core.controls import create_rate_limiter, create_cost_tracker
 from elspeth.core.sda.plugin_registry import normalize_halt_condition_definitions
-from elspeth.core.config_merger import ConfigurationMerger, ConfigSource
 
 
 @dataclass
@@ -22,11 +22,11 @@ class Settings:
     sinks: Any
     orchestrator_config: SDAConfig
     suite_root: Path | None = None
-    suite_defaults: Dict[str, Any] = field(default_factory=dict)
+    suite_defaults: dict[str, Any] = field(default_factory=dict)
     rate_limiter: Any | None = None
     cost_tracker: Any | None = None
-    prompt_packs: Dict[str, Any] = field(default_factory=dict)
-    prompt_pack: Optional[str] = None
+    prompt_packs: dict[str, Any] = field(default_factory=dict)
+    prompt_pack: str | None = None
 
 
 def load_settings(path: str | Path, profile: str = "default") -> Settings:

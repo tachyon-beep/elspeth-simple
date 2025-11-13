@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, ClassVar
 
 
 class MergeStrategy(Enum):
@@ -19,7 +19,7 @@ class MergeStrategy(Enum):
 class ConfigSource:
     """Configuration source with metadata."""
     name: str  # "system_default", "prompt_pack", "profile", "suite", "experiment"
-    data: Dict[str, Any]
+    data: dict[str, Any]
     precedence: int  # Lower number = lower precedence
 
 
@@ -40,7 +40,7 @@ class ConfigurationMerger:
     """
 
     # Define merge strategies for known keys
-    MERGE_STRATEGIES = {
+    MERGE_STRATEGIES: ClassVar[dict[str, MergeStrategy]] = {
         # Lists use APPEND strategy
         "row_plugins": MergeStrategy.APPEND,
         "aggregator_plugins": MergeStrategy.APPEND,
@@ -64,9 +64,9 @@ class ConfigurationMerger:
 
     def __init__(self):
         """Initialize merger with empty trace."""
-        self._merge_trace: List[Dict[str, Any]] = []
+        self._merge_trace: list[dict[str, Any]] = []
 
-    def merge(self, *sources: ConfigSource) -> Dict[str, Any]:
+    def merge(self, *sources: ConfigSource) -> dict[str, Any]:
         """Merge configuration sources with defined precedence.
 
         Args:
@@ -78,7 +78,7 @@ class ConfigurationMerger:
         # Sort by precedence (lowest first)
         sorted_sources = sorted(sources, key=lambda s: s.precedence)
 
-        merged = {}
+        merged: dict[str, Any] = {}
         self._merge_trace = []  # Reset trace
 
         for source in sorted_sources:
@@ -86,7 +86,7 @@ class ConfigurationMerger:
 
         return merged
 
-    def _merge_source(self, base: Dict, source: ConfigSource) -> Dict:
+    def _merge_source(self, base: dict[str, Any], source: ConfigSource) -> dict[str, Any]:
         """Merge single source into base configuration.
 
         Args:

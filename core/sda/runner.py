@@ -158,7 +158,7 @@ class SDARunner:
             payload["failures"] = failures
         aggregates = {}
         for plugin in self.aggregation_transforms or []:
-            derived = plugin.finalize(results)
+            derived = plugin.aggregate(results)
             if derived:
                 aggregates[plugin.name] = derived
         if aggregates:
@@ -243,7 +243,7 @@ class SDARunner:
         event: threading.Event | None = getattr(self, "_early_stop_event", None)
         if not event or event.is_set():
             return
-        plugins: List[EarlyStopPlugin] = getattr(self, "_active_halt_condition_plugins", []) or []
+        plugins: List[HaltConditionPlugin] = getattr(self, "_active_halt_condition_plugins", []) or []
         if not plugins or getattr(self, "_early_stop_reason", None):
             return
 
@@ -337,7 +337,7 @@ class SDARunner:
                 record["retry"] = retry_meta
 
             for plugin in transform_plugins:
-                derived = plugin.process_row(record["row"], record.get("responses") or {"default": record["response"]})
+                derived = plugin.transform(record["row"], record.get("responses") or {"default": record["response"]})
                 if derived:
                     record.setdefault("metrics", {}).update(derived)
             if self._active_security_level:

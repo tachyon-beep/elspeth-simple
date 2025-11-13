@@ -210,14 +210,14 @@ class SDASuiteRunner:
         self,
         df,
         defaults: Dict[str, Any] | None = None,
-        sink_factory: Callable[[ExperimentConfig], List[ResultSink]] | None = None,
+        sink_factory: Callable[[SDACycleConfig], List[ResultSink]] | None = None,
         preflight_info: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         defaults = defaults or {}
         results: Dict[str, Any] = {}
         prompt_packs = defaults.get("prompt_packs", {})
 
-        experiments: List[ExperimentConfig] = []
+        experiments: List[SDACycleConfig] = []
         if self.suite.baseline:
             experiments.append(self.suite.baseline)
         experiments.extend(exp for exp in self.suite.experiments if exp != self.suite.baseline)

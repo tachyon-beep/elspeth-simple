@@ -18,6 +18,7 @@ from elspeth.core.interfaces import LLMClientProtocol, ResultSink
 from elspeth.core.processing import prepare_prompt_context
 from elspeth.core.prompts import PromptEngine, PromptTemplate, PromptRenderingError, PromptValidationError
 from elspeth.core.llm.middleware import LLMMiddleware, LLMRequest
+from elspeth.core.sda.checkpoint import CheckpointManager
 from elspeth.core.sda.plugins import TransformPlugin, AggregationTransform, HaltConditionPlugin
 from elspeth.core.sda.plugin_registry import create_halt_condition_plugin
 from elspeth.core.controls import RateLimiter, CostTracker
@@ -58,13 +59,12 @@ class SDARunner:
 
     def run(self, df: pd.DataFrame) -> Dict[str, Any]:
         self._init_halt_conditions()
-        processed_ids: set[str] | None = None
-        checkpoint_field = None
-        checkpoint_path = None
+        checkpoint_manager: CheckpointManager | None = None
+        checkpoint_field: str | None = None
         if self.checkpoint_config:
             checkpoint_path = Path(self.checkpoint_config.get("path", "checkpoint.jsonl"))
             checkpoint_field = self.checkpoint_config.get("field", "APPID")
-            processed_ids = self._load_checkpoint(checkpoint_path)
+            checkpoint_manager = CheckpointManager(checkpoint_path, checkpoint_field)
 
         transform_plugins = self.transform_plugins or []
         engine = self.prompt_engine or PromptEngine()
@@ -98,7 +98,7 @@ class SDARunner:
         for idx, (_, row) in enumerate(df.iterrows()):
             context = prepare_prompt_context(row, include_fields=self.prompt_fields)
             row_id = context.get(checkpoint_field) if checkpoint_field else None
-            if processed_ids is not None and row_id in processed_ids:
+            if checkpoint_manager and row_id and checkpoint_manager.is_processed(str(row_id)):
                 continue
             if self._early_stop_event and self._early_stop_event.is_set():
                 break
@@ -109,10 +109,8 @@ class SDARunner:
 
         def handle_success(idx: int, record: Dict[str, Any], row_id: str | None) -> None:
             records_with_index.append((idx, record))
-            if checkpoint_path and row_id is not None:
-                if processed_ids is not None:
-                    processed_ids.add(row_id)
-                self._append_checkpoint(checkpoint_path, row_id)
+            if checkpoint_manager and row_id:
+                checkpoint_manager.mark_processed(str(row_id))
             self._maybe_trigger_early_stop(record, row_index=idx)
 
         def handle_failure(failure: Dict[str, Any]) -> None:
@@ -566,18 +564,3 @@ class SDARunner:
                 except Exception:  # pragma: no cover - middleware isolation
                     logger.debug("Middleware %s retry hook failed", getattr(middleware, "name", middleware), exc_info=True)
 
-    def _load_checkpoint(self, path: Path) -> set[str]:
-        processed: set[str] = set()
-        if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                processed.add(line)
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-        return processed
-
-    def _append_checkpoint(self, path: Path, row_id: str) -> None:
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(f"{row_id}\n")

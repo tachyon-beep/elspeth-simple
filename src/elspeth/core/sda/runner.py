@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from elspeth.core.artifact_pipeline import ArtifactPipeline, SinkBinding
-from elspeth.core.llm.middleware import LLMMiddleware
 from elspeth.core.processing import prepare_prompt_context
 from elspeth.core.prompts import PromptEngine, PromptTemplate
 from elspeth.core.sda.checkpoint import CheckpointManager
@@ -19,14 +18,16 @@ from elspeth.core.sda.early_stop import EarlyStopCoordinator
 from elspeth.core.sda.llm_executor import LLMExecutor
 from elspeth.core.sda.plugin_registry import create_halt_condition_plugin
 from elspeth.core.sda.prompt_compiler import PromptCompiler
+from elspeth.core.sda.result_aggregator import ResultAggregator
 from elspeth.core.sda.row_processor import RowProcessor
-from elspeth.core.security import normalize_security_level, resolve_security_level
+from elspeth.core.security import normalize_security_level
 
 if TYPE_CHECKING:
     import pandas as pd
 
     from elspeth.core.controls import CostTracker, RateLimiter
     from elspeth.core.interfaces import LLMClientProtocol, ResultSink
+    from elspeth.core.llm.middleware import LLMMiddleware
     from elspeth.core.sda.plugins import AggregationTransform, HaltConditionPlugin, TransformPlugin
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,12 @@ class SDARunner:
             security_level=self._active_security_level,
         )
 
+        # Create result aggregator
+        aggregator = ResultAggregator(
+            aggregation_plugins=self.aggregation_transforms or [],
+            cost_tracker=self.cost_tracker,
+        )
+
         rows_to_process: list[tuple[int, pd.Series, dict[str, Any], str | None]] = []
         for idx, (_, row) in enumerate(df.iterrows()):
             context = prepare_prompt_context(row, include_fields=self.prompt_fields)
@@ -131,17 +138,14 @@ class SDARunner:
                 break
             rows_to_process.append((idx, row, context, row_id))
 
-        records_with_index: list[tuple[int, dict[str, Any]]] = []
-        failures: list[dict[str, Any]] = []
-
         def handle_success(idx: int, record: dict[str, Any], row_id: str | None) -> None:
-            records_with_index.append((idx, record))
+            aggregator.add_result(record, row_index=idx)
             if checkpoint_manager and row_id:
                 checkpoint_manager.mark_processed(str(row_id))
             self._early_stop_coordinator.check_record(record, row_index=idx)
 
         def handle_failure(failure: dict[str, Any]) -> None:
-            failures.append(failure)
+            aggregator.add_failure(failure)
 
         concurrency_cfg = self.concurrency_config or {}
         if rows_to_process and self._should_run_parallel(concurrency_cfg, len(rows_to_process)):
@@ -162,68 +166,14 @@ class SDARunner:
                 if failure:
                     handle_failure(failure)
 
-        records_with_index.sort(key=lambda item: item[0])
-        results = [record for _, record in records_with_index]
-
-        payload = {"results": results}
-        if failures:
-            payload["failures"] = failures
-        aggregates = {}
-        for plugin in self.aggregation_transforms or []:
-            derived = plugin.aggregate(results)
-            if derived:
-                aggregates[plugin.name] = derived
-        if aggregates:
-            payload["aggregates"] = aggregates
-
-        metadata = {
-            "rows": len(results),
-            "row_count": len(results),
-        }
-        retry_summary = {
-            "total_requests": len(results) + len(failures),
-            "total_retries": 0,
-            "exhausted": len(failures),
-        }
-        retry_present = False
-        for record in results:
-            info = record.get("retry")
-            if info:
-                retry_present = True
-                attempts = int(info.get("attempts", 1))
-                retry_summary["total_retries"] += max(attempts - 1, 0)
-        for failure in failures:
-            info = failure.get("retry")
-            if info:
-                retry_present = True
-                attempts = int(info.get("attempts", 0))
-                retry_summary["total_retries"] += max(attempts - 1, 0)
-        if retry_present:
-            metadata["retry_summary"] = retry_summary
-
-        if aggregates:
-            metadata["aggregates"] = aggregates
-        if self.cost_tracker:
-            summary = self.cost_tracker.summary()
-            if summary:
-                payload["cost_summary"] = summary
-                metadata["cost_summary"] = summary
-        if failures:
-            metadata["failures"] = failures
-
-        df_security_level = getattr(df, "attrs", {}).get("security_level") if hasattr(df, "attrs") else None
-        self._active_security_level = resolve_security_level(self.security_level, df_security_level)
-        metadata["security_level"] = self._active_security_level
-
-        reason = self._early_stop_coordinator.get_reason()
-        if reason:
-            metadata["early_stop"] = reason
-            payload["early_stop"] = reason
-
-        payload["metadata"] = metadata
+        # Build payload with aggregator
+        payload = aggregator.build_payload(
+            security_level=self._active_security_level,
+            early_stop_reason=self._early_stop_coordinator.get_reason(),
+        )
 
         pipeline = ArtifactPipeline(self._build_sink_bindings())
-        pipeline.execute(payload, metadata)
+        pipeline.execute(payload, payload["metadata"])
         self._active_security_level = None
         return payload
 

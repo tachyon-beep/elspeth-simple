@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Any
 
 from elspeth.core.prompts import PromptEngine, PromptTemplate
 
@@ -14,7 +14,7 @@ class CompiledPrompts:
 
     system: PromptTemplate
     user: PromptTemplate
-    criteria: Dict[str, PromptTemplate]
+    criteria: dict[str, PromptTemplate]
 
 
 class PromptCompiler:
@@ -26,8 +26,8 @@ class PromptCompiler:
         system_prompt: str,
         user_prompt: str,
         cycle_name: str,
-        defaults: Dict[str, Any] | None = None,
-        criteria: list[Dict[str, Any]] | None = None,
+        defaults: dict[str, Any] | None = None,
+        criteria: list[dict[str, Any]] | None = None,
     ):
         """
         Initialize prompt compiler.
@@ -61,7 +61,7 @@ class PromptCompiler:
             defaults=self.defaults,
         )
 
-        criteria_templates: Dict[str, PromptTemplate] = {}
+        criteria_templates: dict[str, PromptTemplate] = {}
         for crit in self.criteria:
             template_text = crit.get("template", self.user_prompt)
             crit_name = crit.get("name") or template_text

@@ -19,6 +19,7 @@ from elspeth.core.processing import prepare_prompt_context
 from elspeth.core.prompts import PromptEngine, PromptTemplate, PromptRenderingError, PromptValidationError
 from elspeth.core.llm.middleware import LLMMiddleware, LLMRequest
 from elspeth.core.sda.checkpoint import CheckpointManager
+from elspeth.core.sda.prompt_compiler import PromptCompiler
 from elspeth.core.sda.plugins import TransformPlugin, AggregationTransform, HaltConditionPlugin
 from elspeth.core.sda.plugin_registry import create_halt_condition_plugin
 from elspeth.core.controls import RateLimiter, CostTracker
@@ -68,28 +69,20 @@ class SDARunner:
 
         transform_plugins = self.transform_plugins or []
         engine = self.prompt_engine or PromptEngine()
-        system_template = engine.compile(
-            self.prompt_system or "",
-            name=f"{self.cycle_name or 'experiment'}:system",
+        compiler = PromptCompiler(
+            engine=engine,
+            system_prompt=self.prompt_system or "",
+            user_prompt=self.prompt_template or "",
+            cycle_name=self.cycle_name or "experiment",
             defaults=self.prompt_defaults or {},
+            criteria=self.criteria,
         )
-        user_template = engine.compile(
-            self.prompt_template or "",
-            name=f"{self.cycle_name or 'experiment'}:user",
-            defaults=self.prompt_defaults or {},
-        )
-        criteria_templates: Dict[str, PromptTemplate] = {}
-        if self.criteria:
-            for crit in self.criteria:
-                template_text = crit.get("template", self.prompt_template or "")
-                crit_name = crit.get("name") or template_text
-                defaults = dict(self.prompt_defaults or {})
-                defaults.update(crit.get("defaults", {}))
-                criteria_templates[crit_name] = engine.compile(
-                    template_text,
-                    name=f"{self.cycle_name or 'experiment'}:criteria:{crit_name}",
-                    defaults=defaults,
-                )
+        compiled_prompts = compiler.compile()
+
+        system_template = compiled_prompts.system
+        user_template = compiled_prompts.user
+        criteria_templates = compiled_prompts.criteria
+
         self._compiled_system_prompt = system_template
         self._compiled_user_prompt = user_template
         self._compiled_criteria_prompts = criteria_templates

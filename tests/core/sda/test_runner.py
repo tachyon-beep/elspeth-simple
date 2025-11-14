@@ -87,8 +87,7 @@ def test_runner_skips_checkpointed_rows(sample_df, mock_llm, mock_sink, tmp_path
     checkpoint_path = tmp_path / "checkpoint.jsonl"
 
     # Pre-create checkpoint with id "1"
-    with open(checkpoint_path, "w") as f:
-        f.write('1\n')
+    checkpoint_path.write_text('1\n')
 
     runner = SDARunner(
         llm_client=mock_llm,

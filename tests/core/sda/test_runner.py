@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 import pytest
-from pathlib import Path
-from typing import Dict, Any
 
 from elspeth.core.sda.runner import SDARunner
-from elspeth.core.interfaces import LLMClientProtocol, ResultSink
 
 
 class MockLLMClient:
     """Mock LLM client for testing."""
 
-    def __init__(self, response: Dict[str, Any] | None = None):
+    def __init__(self, response: dict[str, Any] | None = None):
         self.calls: list[tuple[str, str]] = []
         self.response = response or {"content": "mock response"}
 
-    def generate(self, system_prompt: str, user_prompt: str, metadata: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    def generate(self, system_prompt: str, user_prompt: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         self.calls.append((system_prompt, user_prompt))
         return self.response
 
@@ -27,10 +26,10 @@ class MockSink:
     """Mock sink for testing."""
 
     def __init__(self):
-        self.written_payload: Dict[str, Any] | None = None
-        self.written_metadata: Dict[str, Any] | None = None
+        self.written_payload: dict[str, Any] | None = None
+        self.written_metadata: dict[str, Any] | None = None
 
-    def write(self, payload: Dict[str, Any], metadata: Dict[str, Any] | None = None) -> None:
+    def write(self, payload: dict[str, Any], metadata: dict[str, Any] | None = None) -> None:
         self.written_payload = payload
         self.written_metadata = metadata
 
@@ -40,7 +39,7 @@ class MockSink:
     def consumes(self) -> list[str]:
         return []
 
-    def finalize(self, artifacts: Dict[str, Any] | None = None, metadata: Dict[str, Any] | None = None) -> None:
+    def finalize(self, artifacts: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None) -> None:
         pass
 
 
@@ -111,9 +110,9 @@ class MockTransformPlugin:
     """Mock transform plugin."""
 
     def __init__(self):
-        self.calls: list[tuple[Dict, Dict]] = []
+        self.calls: list[tuple[dict, dict]] = []
 
-    def transform(self, row: Dict[str, Any], responses: Dict[str, Any]) -> Dict[str, Any]:
+    def transform(self, row: dict[str, Any], responses: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((row, responses))
         return {"transformed": True}
 

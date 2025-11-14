@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-import json
+from typing import Any
 
 from elspeth.core.config_schema import validate_experiment_config
-from elspeth.core.validation import ConfigurationError
 from elspeth.core.sda.plugin_registry import normalize_halt_condition_definitions
+from elspeth.core.validation import ConfigurationError
 
 
 @dataclass
@@ -26,28 +26,28 @@ class SDACycleConfig:
     enabled: bool = True
     description: str = ""
     author: str = "unknown"
-    tags: List[str] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)  # For experiment-specific data
-    options: Dict[str, Any] = field(default_factory=dict)
+    tags: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)  # For experiment-specific data
+    options: dict[str, Any] = field(default_factory=dict)
     prompt_system: str = ""
     prompt_template: str = ""
-    prompt_fields: Optional[List[str]] = None
-    criteria: Optional[List[Dict[str, Any]]] = None
-    transform_plugin_defs: List[Dict[str, Any]] = field(default_factory=list)
-    aggregation_transform_defs: List[Dict[str, Any]] = field(default_factory=list)
-    sink_defs: List[Dict[str, Any]] = field(default_factory=list)
-    rate_limiter_def: Optional[Dict[str, Any]] = None
-    cost_tracker_def: Optional[Dict[str, Any]] = None
-    prompt_pack: Optional[str] = None
-    prompt_defaults: Optional[Dict[str, Any]] = None
-    llm_middleware_defs: List[Dict[str, Any]] = field(default_factory=list)
-    concurrency_config: Dict[str, Any] | None = None
+    prompt_fields: list[str] | None = None
+    criteria: list[dict[str, Any]] | None = None
+    transform_plugin_defs: list[dict[str, Any]] = field(default_factory=list)
+    aggregation_transform_defs: list[dict[str, Any]] = field(default_factory=list)
+    sink_defs: list[dict[str, Any]] = field(default_factory=list)
+    rate_limiter_def: dict[str, Any] | None = None
+    cost_tracker_def: dict[str, Any] | None = None
+    prompt_pack: str | None = None
+    prompt_defaults: dict[str, Any] | None = None
+    llm_middleware_defs: list[dict[str, Any]] = field(default_factory=list)
+    concurrency_config: dict[str, Any] | None = None
     security_level: str | None = None
-    halt_condition_plugin_defs: List[Dict[str, Any]] = field(default_factory=list)
-    halt_condition_config: Dict[str, Any] | None = None
+    halt_condition_plugin_defs: list[dict[str, Any]] = field(default_factory=list)
+    halt_condition_config: dict[str, Any] | None = None
 
     @classmethod
-    def from_file(cls, path: Path) -> "SDACycleConfig":
+    def from_file(cls, path: Path) -> SDACycleConfig:
         config_path = path
         data = json.loads(path.read_text(encoding="utf-8"))
         try:
@@ -116,15 +116,15 @@ class SDASuite:
     Orchestrators handle baseline identification from cycle metadata.
     """
     root: Path
-    cycles: List[SDACycleConfig]
+    cycles: list[SDACycleConfig]
 
     @classmethod
-    def load(cls, root: Path) -> "SDASuite":
+    def load(cls, root: Path) -> SDASuite:
         """Load all enabled cycles from directory structure.
 
         No baseline identification - orchestrators handle that.
         """
-        cycles: List[SDACycleConfig] = []
+        cycles: list[SDACycleConfig] = []
 
         for folder in sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")):
             config_path = folder / "config.json"

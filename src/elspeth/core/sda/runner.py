@@ -11,11 +11,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from elspeth.core.artifact_pipeline import ArtifactPipeline, SinkBinding
-from elspeth.core.llm.middleware import LLMMiddleware, LLMRequest
+from elspeth.core.llm.middleware import LLMMiddleware
 from elspeth.core.processing import prepare_prompt_context
 from elspeth.core.prompts import PromptEngine, PromptTemplate
 from elspeth.core.sda.checkpoint import CheckpointManager
 from elspeth.core.sda.early_stop import EarlyStopCoordinator
+from elspeth.core.sda.llm_executor import LLMExecutor
 from elspeth.core.sda.plugin_registry import create_halt_condition_plugin
 from elspeth.core.sda.prompt_compiler import PromptCompiler
 from elspeth.core.sda.row_processor import RowProcessor
@@ -97,6 +98,16 @@ class SDARunner:
         self._compiled_user_prompt = user_template
         self._compiled_criteria_prompts = criteria_templates
 
+        # Create LLM executor
+        llm_executor = LLMExecutor(
+            llm_client=self.llm_client,
+            middlewares=self.llm_middlewares or [],
+            retry_config=self.retry_config,
+            rate_limiter=self.rate_limiter,
+            cost_tracker=self.cost_tracker,
+            cycle_name=self.cycle_name,
+        )
+
         # Create row processor
         row_processor = RowProcessor(
             llm_client=self.llm_client,
@@ -106,7 +117,7 @@ class SDARunner:
             criteria_templates=criteria_templates,
             transform_plugins=transform_plugins,
             criteria=self.criteria,
-            llm_executor=self,  # SDARunner has _execute_llm for now
+            llm_executor=llm_executor,
             security_level=self._active_security_level,
         )
 
@@ -284,123 +295,4 @@ class SDARunner:
             )
         return bindings
 
-    def _execute_llm(self, user_prompt: str, metadata: dict[str, Any], *, system_prompt: str | None = None) -> dict[str, Any]:
-        delay = 0.0
-        max_attempts = 1
-        backoff = 0.0
-        if self.retry_config:
-            max_attempts = int(self.retry_config.get("max_attempts", 1))
-            delay = float(self.retry_config.get("initial_delay", 0.0))
-            backoff = float(self.retry_config.get("backoff_multiplier", 1.0))
-
-        attempt = 0
-        last_error: Exception | None = None
-        attempt_history: list[dict[str, Any]] = []
-        last_request: LLMRequest | None = None
-        while attempt < max_attempts:
-            attempt += 1
-            try:
-                request = LLMRequest(
-                    system_prompt=system_prompt or self.prompt_system or "",
-                    user_prompt=user_prompt,
-                    metadata={**metadata, "attempt": attempt},
-                )
-                last_request = request
-                attempt_start = time.time()
-                for middleware in self.llm_middlewares or []:
-                    request = middleware.before_request(request)
-
-                if self.rate_limiter:
-                    acquire_context = self.rate_limiter.acquire({"experiment": self.cycle_name, **request.metadata})
-                else:
-                    acquire_context = None
-
-                if acquire_context:
-                    with acquire_context:
-                        response = self.llm_client.generate(
-                            system_prompt=request.system_prompt,
-                            user_prompt=request.user_prompt,
-                            metadata=request.metadata,
-                        )
-                else:
-                    response = self.llm_client.generate(
-                        system_prompt=request.system_prompt,
-                        user_prompt=request.user_prompt,
-                        metadata=request.metadata,
-                    )
-
-                for middleware in reversed(self.llm_middlewares or []):
-                    response = middleware.after_response(request, response)
-                if self.cost_tracker:
-                    cost_metrics = self.cost_tracker.record(response, {"experiment": self.cycle_name, **request.metadata})
-                    if cost_metrics:
-                        response.setdefault("metrics", {}).update(cost_metrics)
-                attempt_record = {
-                    "attempt": attempt,
-                    "status": "success",
-                    "duration": max(time.time() - attempt_start, 0.0),
-                }
-                attempt_history.append(attempt_record)
-                response.setdefault("metrics", {})["attempts_used"] = attempt
-                response.setdefault("retry", {
-                    "attempts": attempt,
-                    "max_attempts": max_attempts,
-                    "history": attempt_history,
-                })
-                if self.rate_limiter:
-                    self.rate_limiter.update_usage(response, request.metadata)
-                return response
-            except Exception as exc:  # pylint: disable=broad-except
-                last_error = exc
-                attempt_record = {
-                    "attempt": attempt,
-                    "status": "error",
-                    "duration": max(time.time() - attempt_start, 0.0),
-                    "error": str(exc),
-                    "error_type": exc.__class__.__name__,
-                }
-                if attempt >= max_attempts:
-                    attempt_history.append(attempt_record)
-                    break
-                sleep_for = delay if delay > 0 else 0
-                attempt_record["next_delay"] = sleep_for
-                attempt_history.append(attempt_record)
-                if sleep_for > 0:
-                    time.sleep(sleep_for)
-                if backoff and backoff > 0:
-                    delay = delay * backoff if delay else backoff
-
-        assert last_error is not None
-        if last_request is not None:
-            last_error._dmp_retry_history = attempt_history
-            last_error._dmp_retry_attempts = attempt
-            last_error._dmp_retry_max_attempts = max_attempts
-            try:
-                self._notify_retry_exhausted(last_request, last_error, attempt_history)
-            except Exception:  # pragma: no cover - defensive logging
-                logger.debug("Retry exhausted hook raised", exc_info=True)
-        raise last_error
-
-    def _notify_retry_exhausted(self, request: LLMRequest, error: Exception, history: list[dict[str, Any]]) -> None:
-        metadata = {
-            "experiment": self.cycle_name,
-            "attempts": getattr(error, "_dmp_retry_attempts", len(history)),
-            "max_attempts": getattr(error, "_dmp_retry_max_attempts", len(history)),
-            "error": str(error),
-            "error_type": error.__class__.__name__,
-            "history": history,
-        }
-        logger.warning(
-            "LLM request exhausted retries for experiment '%s' after %s attempts: %s",
-            self.cycle_name,
-            metadata["attempts"],
-            metadata["error"],
-        )
-        for middleware in self.llm_middlewares or []:
-            hook = getattr(middleware, "on_retry_exhausted", None)
-            if callable(hook):
-                try:
-                    hook(request, metadata, error)
-                except Exception:  # pragma: no cover - middleware isolation
-                    logger.debug("Middleware %s retry hook failed", getattr(middleware, "name", middleware), exc_info=True)
 

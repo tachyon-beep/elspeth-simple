@@ -9,6 +9,7 @@ if TYPE_CHECKING:
 
     from elspeth.core.interfaces import LLMClientProtocol
     from elspeth.core.prompts import PromptEngine, PromptTemplate
+    from elspeth.core.sda.llm_executor import LLMExecutor
     from elspeth.core.sda.plugins import TransformPlugin
 
 
@@ -24,7 +25,7 @@ class RowProcessor:
         criteria_templates: dict[str, PromptTemplate],
         transform_plugins: list[TransformPlugin],
         criteria: list[dict[str, Any]] | None = None,
-        llm_executor: Any = None,  # LLMExecutor will be extracted in next task
+        llm_executor: LLMExecutor | None = None,
         security_level: str | None = None,
     ):
         """
@@ -82,7 +83,7 @@ class RowProcessor:
 
                     # Use LLM executor if available, otherwise direct call
                     if self.llm_executor:
-                        response = self.llm_executor._execute_llm(
+                        response = self.llm_executor.execute(
                             user_prompt,
                             {"row_id": row.get("APPID"), "criteria": crit_name},
                             system_prompt=rendered_system,
@@ -113,7 +114,7 @@ class RowProcessor:
 
                 # Use LLM executor if available
                 if self.llm_executor:
-                    response = self.llm_executor._execute_llm(
+                    response = self.llm_executor.execute(
                         user_prompt,
                         {"row_id": row.get("APPID")},
                         system_prompt=rendered_system,

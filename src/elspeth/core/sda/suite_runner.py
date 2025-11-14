@@ -8,29 +8,28 @@ This module is kept for backward compatibility only.
 
 from __future__ import annotations
 
-import warnings
-
-from dataclasses import dataclass, field
 import json
-from pathlib import Path
-from typing import Any, Dict, List, Callable
+import warnings
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
 
-from elspeth.core.sda.config import SDASuite, SDACycleConfig
-from elspeth.core.sda.runner import SDARunner
+from elspeth.core import registry as core_registry
+from elspeth.core.config_merger import ConfigSource, ConfigurationMerger
+from elspeth.core.controls import create_cost_tracker, create_rate_limiter
+from elspeth.core.interfaces import LLMClientProtocol, ResultSink
+from elspeth.core.llm.registry import create_middleware
+from elspeth.core.sda.config import SDACycleConfig, SDASuite
 from elspeth.core.sda.plugin_registry import (
-    create_transform_plugin,
     create_aggregation_transform,
     create_baseline_plugin,
     create_halt_condition_plugin,
+    create_transform_plugin,
     normalize_halt_condition_definitions,
 )
-from elspeth.core.interfaces import LLMClientProtocol, ResultSink
-from elspeth.core.controls import create_rate_limiter, create_cost_tracker
-from elspeth.core.llm.registry import create_middleware
-from elspeth.core import registry as core_registry
+from elspeth.core.sda.runner import SDARunner
 from elspeth.core.security import resolve_security_level
 from elspeth.core.validation import ConfigurationError
-from elspeth.core.config_merger import ConfigurationMerger, ConfigSource
 
 
 @dataclass
@@ -38,8 +37,8 @@ class SDASuiteRunner:
     """DEPRECATED: Use ExperimentalOrchestrator from orchestrators package instead."""
     suite: SDASuite
     llm_client: LLMClientProtocol
-    sinks: List[ResultSink]
-    _shared_middlewares: Dict[str, Any] = field(default_factory=dict, init=False)
+    sinks: list[ResultSink]
+    _shared_middlewares: dict[str, Any] = field(default_factory=dict, init=False)
 
     def __post_init__(self):
         warnings.warn(
@@ -51,8 +50,8 @@ class SDASuiteRunner:
     def build_runner(
         self,
         config: SDACycleConfig,
-        defaults: Dict[str, Any],
-        sinks: List[ResultSink],
+        defaults: dict[str, Any],
+        sinks: list[ResultSink],
     ) -> SDARunner:
         """Build runner for single experiment with merged configuration.
 
@@ -186,7 +185,7 @@ class SDASuiteRunner:
         }
         return SDARunner(**runner_kwargs)
 
-    def _create_middlewares(self, definitions: list[Dict[str, Any]] | None) -> list[Any]:
+    def _create_middlewares(self, definitions: list[dict[str, Any]] | None) -> list[Any]:
         instances: list[Any] = []
         for defn in definitions or []:
             name = defn.get("name") or defn.get("plugin")
@@ -196,8 +195,8 @@ class SDASuiteRunner:
             instances.append(self._shared_middlewares[identifier])
         return instances
 
-    def _instantiate_sinks(self, defs: List[Dict[str, Any]]) -> List[ResultSink]:
-        sinks: List[ResultSink] = []
+    def _instantiate_sinks(self, defs: list[dict[str, Any]]) -> list[ResultSink]:
+        sinks: list[ResultSink] = []
         for index, entry in enumerate(defs):
             plugin = entry.get("plugin")
             raw_options = dict(entry.get("options", {}))
@@ -206,29 +205,29 @@ class SDASuiteRunner:
             artifacts_cfg = options.pop("artifacts", None)
             security_level = options.pop("security_level", entry.get("security_level"))
             sink = core_registry.registry.create_sink(plugin, options)
-            setattr(sink, "_dmp_artifact_config", artifacts_cfg or {})
-            setattr(sink, "_dmp_plugin_name", plugin)
+            sink._dmp_artifact_config = artifacts_cfg or {}
+            sink._dmp_plugin_name = plugin
             base_name = entry.get("name") or plugin or f"sink{index}"
-            setattr(sink, "_dmp_sink_name", base_name)
+            sink._dmp_sink_name = base_name
             if security_level:
-                setattr(sink, "_dmp_security_level", security_level)
+                sink._dmp_security_level = security_level
             sinks.append(sink)
         return sinks
 
     def run(
         self,
         df,
-        defaults: Dict[str, Any] | None = None,
-        sink_factory: Callable[[SDACycleConfig], List[ResultSink]] | None = None,
-        preflight_info: Dict[str, Any] | None = None,
-    ) -> Dict[str, Any]:
+        defaults: dict[str, Any] | None = None,
+        sink_factory: Callable[[SDACycleConfig], list[ResultSink]] | None = None,
+        preflight_info: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         defaults = defaults or {}
-        results: Dict[str, Any] = {}
+        results: dict[str, Any] = {}
         prompt_packs = defaults.get("prompt_packs", {})
 
         # Note: This code is deprecated. For new code use ExperimentalOrchestrator.
         # Legacy baseline detection for backward compatibility
-        experiments: List[SDACycleConfig] = []
+        experiments: list[SDACycleConfig] = []
         baseline = None
         for cycle in self.suite.cycles:
             if cycle.metadata.get("is_baseline"):

@@ -2,43 +2,44 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 from elspeth.core.sda.plugins import (
-    TransformPlugin,
     AggregationTransform,
     ComparisonPlugin,
     HaltConditionPlugin,
+    TransformPlugin,
 )
 from elspeth.core.validation import ConfigurationError, validate_schema
 
 
 class _PluginFactory:
-    def __init__(self, factory: Callable[[Dict[str, Any]], Any], schema: Mapping[str, Any] | None = None):
+    def __init__(self, factory: Callable[[dict[str, Any]], Any], schema: Mapping[str, Any] | None = None):
         self.factory = factory
         self.schema = schema
 
-    def validate(self, options: Dict[str, Any], *, context: str) -> None:
+    def validate(self, options: dict[str, Any], *, context: str) -> None:
         if self.schema is None:
             return
         errors = list(validate_schema(options or {}, self.schema, context=context))
         if errors:
             raise ConfigurationError("\n".join(msg.format() for msg in errors))
 
-    def create(self, options: Dict[str, Any], *, context: str) -> Any:
+    def create(self, options: dict[str, Any], *, context: str) -> Any:
         self.validate(options, context=context)
         return self.factory(options)
 
 
-_transform_plugins: Dict[str, _PluginFactory] = {}
-_aggregation_transforms: Dict[str, _PluginFactory] = {}
-_baseline_plugins: Dict[str, _PluginFactory] = {}
-_halt_condition_plugins: Dict[str, _PluginFactory] = {}
+_transform_plugins: dict[str, _PluginFactory] = {}
+_aggregation_transforms: dict[str, _PluginFactory] = {}
+_baseline_plugins: dict[str, _PluginFactory] = {}
+_halt_condition_plugins: dict[str, _PluginFactory] = {}
 
 
 def register_transform_plugin(
     name: str,
-    factory: Callable[[Dict[str, Any]], TransformPlugin],
+    factory: Callable[[dict[str, Any]], TransformPlugin],
     *,
     schema: Mapping[str, Any] | None = None,
 ) -> None:
@@ -47,7 +48,7 @@ def register_transform_plugin(
 
 def register_aggregation_transform(
     name: str,
-    factory: Callable[[Dict[str, Any]], AggregationTransform],
+    factory: Callable[[dict[str, Any]], AggregationTransform],
     *,
     schema: Mapping[str, Any] | None = None,
 ) -> None:
@@ -56,7 +57,7 @@ def register_aggregation_transform(
 
 def register_comparison_plugin(
     name: str,
-    factory: Callable[[Dict[str, Any]], ComparisonPlugin],
+    factory: Callable[[dict[str, Any]], ComparisonPlugin],
     *,
     schema: Mapping[str, Any] | None = None,
 ) -> None:
@@ -65,14 +66,14 @@ def register_comparison_plugin(
 
 def register_halt_condition_plugin(
     name: str,
-    factory: Callable[[Dict[str, Any]], HaltConditionPlugin],
+    factory: Callable[[dict[str, Any]], HaltConditionPlugin],
     *,
     schema: Mapping[str, Any] | None = None,
 ) -> None:
     _halt_condition_plugins[name] = _PluginFactory(factory, schema=schema)
 
 
-def create_transform_plugin(definition: Dict[str, Any]) -> TransformPlugin:
+def create_transform_plugin(definition: dict[str, Any]) -> TransformPlugin:
     if not definition:
         raise ValueError("Transform plugin definition cannot be empty")
     name = definition.get("name")
@@ -82,7 +83,7 @@ def create_transform_plugin(definition: Dict[str, Any]) -> TransformPlugin:
     return _transform_plugins[name].create(options, context=f"transform_plugin:{name}")
 
 
-def create_aggregation_transform(definition: Dict[str, Any]) -> AggregationTransform:
+def create_aggregation_transform(definition: dict[str, Any]) -> AggregationTransform:
     if not definition:
         raise ValueError("Aggregation transform definition cannot be empty")
     name = definition.get("name")
@@ -92,7 +93,7 @@ def create_aggregation_transform(definition: Dict[str, Any]) -> AggregationTrans
     return _aggregation_transforms[name].create(options, context=f"aggregation_transform:{name}")
 
 
-def create_baseline_plugin(definition: Dict[str, Any]) -> ComparisonPlugin:
+def create_baseline_plugin(definition: dict[str, Any]) -> ComparisonPlugin:
     if not definition:
         raise ValueError("Baseline plugin definition cannot be empty")
     name = definition.get("name")
@@ -102,7 +103,7 @@ def create_baseline_plugin(definition: Dict[str, Any]) -> ComparisonPlugin:
     return _baseline_plugins[name].create(options, context=f"baseline_plugin:{name}")
 
 
-def create_halt_condition_plugin(definition: Dict[str, Any]) -> HaltConditionPlugin:
+def create_halt_condition_plugin(definition: dict[str, Any]) -> HaltConditionPlugin:
     if not definition:
         raise ValueError("Halt condition plugin definition cannot be empty")
     name = definition.get("name")
@@ -160,23 +161,23 @@ register_comparison_plugin(
 
 
 __all__ = [
-    "register_transform_plugin",
-    "register_aggregation_transform",
-    "register_comparison_plugin",
-    "create_row_plugin",
     "create_aggregation_plugin",
     "create_baseline_plugin",
-    "register_halt_condition_plugin",
     "create_early_stop_plugin",
-    "validate_row_plugin_definition",
+    "create_row_plugin",
+    "normalize_halt_condition_definitions",
+    "register_aggregation_transform",
+    "register_comparison_plugin",
+    "register_halt_condition_plugin",
+    "register_transform_plugin",
     "validate_aggregation_plugin_definition",
     "validate_baseline_plugin_definition",
     "validate_early_stop_plugin_definition",
-    "normalize_halt_condition_definitions",
+    "validate_row_plugin_definition",
 ]
 
 
-def validate_row_plugin_definition(definition: Dict[str, Any]) -> None:
+def validate_row_plugin_definition(definition: dict[str, Any]) -> None:
     if not definition:
         raise ConfigurationError("Row plugin definition cannot be empty")
     name = definition.get("name")
@@ -186,7 +187,7 @@ def validate_row_plugin_definition(definition: Dict[str, Any]) -> None:
     _transform_plugins[name].validate(options, context=f"row_plugin:{name}")
 
 
-def validate_aggregation_plugin_definition(definition: Dict[str, Any]) -> None:
+def validate_aggregation_plugin_definition(definition: dict[str, Any]) -> None:
     if not definition:
         raise ConfigurationError("Aggregation plugin definition cannot be empty")
     name = definition.get("name")
@@ -196,7 +197,7 @@ def validate_aggregation_plugin_definition(definition: Dict[str, Any]) -> None:
     _aggregation_transforms[name].validate(options, context=f"aggregation_plugin:{name}")
 
 
-def validate_baseline_plugin_definition(definition: Dict[str, Any]) -> None:
+def validate_baseline_plugin_definition(definition: dict[str, Any]) -> None:
     if not definition:
         raise ConfigurationError("Baseline plugin definition cannot be empty")
     name = definition.get("name")
@@ -206,7 +207,7 @@ def validate_baseline_plugin_definition(definition: Dict[str, Any]) -> None:
     _baseline_plugins[name].validate(options, context=f"baseline_plugin:{name}")
 
 
-def validate_early_stop_plugin_definition(definition: Dict[str, Any]) -> None:
+def validate_early_stop_plugin_definition(definition: dict[str, Any]) -> None:
     if not definition:
         raise ConfigurationError("Early-stop plugin definition cannot be empty")
     name = definition.get("name")
@@ -216,10 +217,10 @@ def validate_early_stop_plugin_definition(definition: Dict[str, Any]) -> None:
     _halt_condition_plugins[name].validate(options, context=f"early_stop_plugin:{name}")
 
 
-def normalize_halt_condition_definitions(definitions: Any) -> List[Dict[str, Any]]:
+def normalize_halt_condition_definitions(definitions: Any) -> list[dict[str, Any]]:
     """Normalise raw early-stop definitions into plugin factory definitions."""
 
-    normalized: List[Dict[str, Any]] = []
+    normalized: list[dict[str, Any]] = []
     if not definitions:
         return normalized
 

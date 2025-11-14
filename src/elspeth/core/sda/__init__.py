@@ -10,7 +10,7 @@ from .suite_runner import SDASuiteRunner
 
 __all__ = [
     "SDACycleConfig",
-    "SDASuite",
     "SDARunner",
+    "SDASuite",
     "SDASuiteRunner",  # Deprecated
 ]

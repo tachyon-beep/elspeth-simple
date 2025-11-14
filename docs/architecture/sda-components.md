@@ -289,6 +289,32 @@ Each component has dedicated unit tests that verify:
 
 ## Migration Notes
 
+### SDASuiteRunner Removal (2025-11-14)
+
+**Removed:** `SDASuiteRunner` class from `core/sda/suite_runner.py` (339 lines)
+
+**Reason:** Pre-release status allows breaking changes without deprecation period.
+
+**Migration:** Use orchestrators package instead:
+- For sequential cycle execution: `orchestrators.StandardOrchestrator`
+- For A/B testing with baseline: `orchestrators.ExperimentalOrchestrator`
+
+**Example:**
+```python
+# Old (removed):
+from elspeth.core.sda import SDASuiteRunner
+runner = SDASuiteRunner(suite, llm_client, sinks)
+
+# New:
+from elspeth.orchestrators import StandardOrchestrator
+orchestrator = StandardOrchestrator()
+# Use through suite execution, not directly instantiated
+```
+
+No code changes needed for existing users (only one customer: project maintainer).
+
+### SDA Refactoring (2025-11-14)
+
 **Breaking Changes:** None - 100% backward compatible
 
 **Deprecated:** None

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from elspeth.core.prompts import PromptEngine, PromptTemplate
+from elspeth.core.prompts import PromptEngine, PromptTemplate  # noqa: TC001
 
 
 @dataclass

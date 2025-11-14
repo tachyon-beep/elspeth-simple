@@ -9,11 +9,6 @@ from .result_aggregator import ResultAggregator
 from .row_processor import RowProcessor
 from .runner import SDARunner
 
-# DEPRECATED: SDASuiteRunner moved to orchestrators package
-# Use StandardOrchestrator or ExperimentalOrchestrator instead
-# Kept for backward compatibility - will be removed in future version
-from .suite_runner import SDASuiteRunner
-
 __all__ = [
     "CheckpointManager",
     "CompiledPrompts",
@@ -25,5 +20,4 @@ __all__ = [
     "SDACycleConfig",
     "SDARunner",
     "SDASuite",
-    "SDASuiteRunner",  # Deprecated
 ]

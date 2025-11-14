@@ -13,11 +13,12 @@ from typing import TYPE_CHECKING, Any
 from elspeth.core.artifact_pipeline import ArtifactPipeline, SinkBinding
 from elspeth.core.llm.middleware import LLMMiddleware, LLMRequest
 from elspeth.core.processing import prepare_prompt_context
-from elspeth.core.prompts import PromptEngine, PromptRenderingError, PromptTemplate, PromptValidationError
+from elspeth.core.prompts import PromptEngine, PromptTemplate
 from elspeth.core.sda.checkpoint import CheckpointManager
 from elspeth.core.sda.early_stop import EarlyStopCoordinator
 from elspeth.core.sda.plugin_registry import create_halt_condition_plugin
 from elspeth.core.sda.prompt_compiler import PromptCompiler
+from elspeth.core.sda.row_processor import RowProcessor
 from elspeth.core.security import normalize_security_level, resolve_security_level
 
 if TYPE_CHECKING:
@@ -96,6 +97,19 @@ class SDARunner:
         self._compiled_user_prompt = user_template
         self._compiled_criteria_prompts = criteria_templates
 
+        # Create row processor
+        row_processor = RowProcessor(
+            llm_client=self.llm_client,
+            engine=engine,
+            system_template=system_template,
+            user_template=user_template,
+            criteria_templates=criteria_templates,
+            transform_plugins=transform_plugins,
+            criteria=self.criteria,
+            llm_executor=self,  # SDARunner has _execute_llm for now
+            security_level=self._active_security_level,
+        )
+
         rows_to_process: list[tuple[int, pd.Series, dict[str, Any], str | None]] = []
         for idx, (_, row) in enumerate(df.iterrows()):
             context = prepare_prompt_context(row, include_fields=self.prompt_fields)
@@ -122,11 +136,7 @@ class SDARunner:
         if rows_to_process and self._should_run_parallel(concurrency_cfg, len(rows_to_process)):
             self._run_parallel(
                 rows_to_process,
-                engine,
-                system_template,
-                user_template,
-                criteria_templates,
-                transform_plugins,
+                row_processor,
                 handle_success,
                 handle_failure,
                 concurrency_cfg,
@@ -135,16 +145,7 @@ class SDARunner:
             for idx, row, context, row_id in rows_to_process:
                 if self._early_stop_coordinator.is_stopped():
                     break
-                record, failure = self._process_single_row(
-                    engine,
-                    system_template,
-                    user_template,
-                    criteria_templates,
-                    transform_plugins,
-                    context,
-                    row,
-                    row_id,
-                )
+                record, failure = row_processor.process_row(row, context, row_id)
                 if record:
                     handle_success(idx, record, row_id)
                 if failure:
@@ -215,83 +216,6 @@ class SDARunner:
         self._active_security_level = None
         return payload
 
-    def _process_single_row(
-        self,
-        engine: PromptEngine,
-        system_template: PromptTemplate,
-        user_template: PromptTemplate,
-        criteria_templates: dict[str, PromptTemplate],
-        transform_plugins: list[TransformPlugin],
-        context: dict[str, Any],
-        row: pd.Series,
-        row_id: str | None,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        if self._early_stop_coordinator.is_stopped():
-            return None, None
-        try:
-            rendered_system_prompt = engine.render(system_template, context)
-            if self.criteria:
-                responses: dict[str, dict[str, Any]] = {}
-                for crit in self.criteria:
-                    crit_name = crit.get("name") or crit.get("template", "criteria")
-                    prompt_template = criteria_templates[crit_name]
-                    user_prompt = engine.render(prompt_template, context, extra={"criteria": crit_name})
-                    response = self._execute_llm(
-                        user_prompt,
-                        {"row_id": row.get("APPID"), "criteria": crit_name},
-                        system_prompt=rendered_system_prompt,
-                    )
-                    responses[crit_name] = response
-                first_response = next(iter(responses.values())) if responses else {}
-                record: dict[str, Any] = {"row": context, "response": first_response, "responses": responses}
-                for resp in responses.values():
-                    metrics = resp.get("metrics")
-                    if metrics:
-                        record.setdefault("metrics", {}).update(metrics)
-            else:
-                user_prompt = engine.render(user_template, context)
-                response = self._execute_llm(
-                    user_prompt,
-                    {"row_id": row.get("APPID")},
-                    system_prompt=rendered_system_prompt,
-                )
-                record = {"row": context, "response": response}
-                metrics = response.get("metrics")
-                if metrics:
-                    record.setdefault("metrics", {}).update(metrics)
-
-            retry_meta = response.get("retry")
-            if retry_meta:
-                record["retry"] = retry_meta
-
-            for plugin in transform_plugins:
-                derived = plugin.transform(record["row"], record.get("responses") or {"default": record["response"]})
-                if derived:
-                    record.setdefault("metrics", {}).update(derived)
-            if self._active_security_level:
-                record["security_level"] = self._active_security_level
-            return record, None
-        except (PromptRenderingError, PromptValidationError) as exc:
-            return None, {
-                "row": context,
-                "error": str(exc),
-                "timestamp": time.time(),
-            }
-        except Exception as exc:  # pylint: disable=broad-except
-            failure = {
-                "row": context,
-                "error": str(exc),
-                "timestamp": time.time(),
-            }
-            history = getattr(exc, "_dmp_retry_history", None)
-            if history:
-                failure["retry"] = {
-                    "attempts": getattr(exc, "_dmp_retry_attempts", len(history)),
-                    "max_attempts": getattr(exc, "_dmp_retry_max_attempts", len(history)),
-                    "history": history,
-                }
-            return None, failure
-
     def _should_run_parallel(self, config: dict[str, Any], backlog_size: int) -> bool:
         if not config or not config.get("enabled"):
             return False
@@ -304,11 +228,7 @@ class SDARunner:
     def _run_parallel(
         self,
         rows_to_process: list[tuple[int, pd.Series, dict[str, Any], str | None]],
-        engine: PromptEngine,
-        system_template: PromptTemplate,
-        user_template: PromptTemplate,
-        criteria_templates: dict[str, PromptTemplate],
-        transform_plugins: list[TransformPlugin],
+        row_processor: RowProcessor,
         handle_success,
         handle_failure,
         config: dict[str, Any],
@@ -323,16 +243,7 @@ class SDARunner:
             if self._early_stop_coordinator.is_stopped():
                 return
             idx, row, context, row_id = data
-            record, failure = self._process_single_row(
-                engine,
-                system_template,
-                user_template,
-                criteria_templates,
-                transform_plugins,
-                context,
-                row,
-                row_id,
-            )
+            record, failure = row_processor.process_row(row, context, row_id)
             with lock:
                 if record:
                     handle_success(idx, record, row_id)

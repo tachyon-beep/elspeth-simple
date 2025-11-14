@@ -2,30 +2,30 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-import contextlib
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List
-import json
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-import pandas as pd
-
-from elspeth.core.interfaces import LLMClientProtocol, ResultSink
-from elspeth.core.processing import prepare_prompt_context
-from elspeth.core.prompts import PromptEngine, PromptTemplate, PromptRenderingError, PromptValidationError
-from elspeth.core.llm.middleware import LLMMiddleware, LLMRequest
-from elspeth.core.sda.checkpoint import CheckpointManager
-from elspeth.core.sda.prompt_compiler import PromptCompiler
-from elspeth.core.sda.plugins import TransformPlugin, AggregationTransform, HaltConditionPlugin
-from elspeth.core.sda.plugin_registry import create_halt_condition_plugin
-from elspeth.core.controls import RateLimiter, CostTracker
-from elspeth.core.security import normalize_security_level, resolve_security_level
 from elspeth.core.artifact_pipeline import ArtifactPipeline, SinkBinding
+from elspeth.core.llm.middleware import LLMMiddleware, LLMRequest
+from elspeth.core.processing import prepare_prompt_context
+from elspeth.core.prompts import PromptEngine, PromptRenderingError, PromptTemplate, PromptValidationError
+from elspeth.core.sda.checkpoint import CheckpointManager
+from elspeth.core.sda.early_stop import EarlyStopCoordinator
+from elspeth.core.sda.plugin_registry import create_halt_condition_plugin
+from elspeth.core.sda.prompt_compiler import PromptCompiler
+from elspeth.core.security import normalize_security_level, resolve_security_level
 
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from elspeth.core.controls import CostTracker, RateLimiter
+    from elspeth.core.interfaces import LLMClientProtocol, ResultSink
+    from elspeth.core.sda.plugins import AggregationTransform, HaltConditionPlugin, TransformPlugin
 
 logger = logging.getLogger(__name__)
 
@@ -33,33 +33,42 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SDARunner:
     llm_client: LLMClientProtocol
-    sinks: List[ResultSink]
+    sinks: list[ResultSink]
     prompt_system: str
     prompt_template: str
-    prompt_fields: List[str] | None = None
-    criteria: List[Dict[str, str]] | None = None
-    transform_plugins: List[TransformPlugin] | None = None
-    aggregation_transforms: List[AggregationTransform] | None = None
+    prompt_fields: list[str] | None = None
+    criteria: list[dict[str, str]] | None = None
+    transform_plugins: list[TransformPlugin] | None = None
+    aggregation_transforms: list[AggregationTransform] | None = None
     rate_limiter: RateLimiter | None = None
     cost_tracker: CostTracker | None = None
     cycle_name: str | None = None
-    retry_config: Dict[str, Any] | None = None
-    checkpoint_config: Dict[str, Any] | None = None
+    retry_config: dict[str, Any] | None = None
+    checkpoint_config: dict[str, Any] | None = None
     _checkpoint_ids: set[str] | None = None
-    prompt_defaults: Dict[str, Any] | None = None
+    prompt_defaults: dict[str, Any] | None = None
     prompt_engine: PromptEngine | None = None
     _compiled_system_prompt: PromptTemplate | None = None
     _compiled_user_prompt: PromptTemplate | None = None
-    _compiled_criteria_prompts: Dict[str, PromptTemplate] | None = None
+    _compiled_criteria_prompts: dict[str, PromptTemplate] | None = None
     llm_middlewares: list[LLMMiddleware] | None = None
-    concurrency_config: Dict[str, Any] | None = None
+    concurrency_config: dict[str, Any] | None = None
     security_level: str | None = None
     _active_security_level: str | None = None
-    halt_condition_plugins: List[HaltConditionPlugin] | None = None
-    halt_condition_config: Dict[str, Any] | None = None
+    halt_condition_plugins: list[HaltConditionPlugin] | None = None
+    halt_condition_config: dict[str, Any] | None = None
 
-    def run(self, df: pd.DataFrame) -> Dict[str, Any]:
-        self._init_halt_conditions()
+    def run(self, df: pd.DataFrame) -> dict[str, Any]:
+        # Initialize early stop coordinator
+        plugins = []
+        if self.halt_condition_plugins:
+            plugins = list(self.halt_condition_plugins)
+        elif self.halt_condition_config:
+            definition = {"name": "threshold", "options": dict(self.halt_condition_config)}
+            plugin = create_halt_condition_plugin(definition)
+            plugins = [plugin]
+        self._early_stop_coordinator = EarlyStopCoordinator(plugins=plugins)
+
         checkpoint_manager: CheckpointManager | None = None
         checkpoint_field: str | None = None
         if self.checkpoint_config:
@@ -87,26 +96,26 @@ class SDARunner:
         self._compiled_user_prompt = user_template
         self._compiled_criteria_prompts = criteria_templates
 
-        rows_to_process: List[tuple[int, pd.Series, Dict[str, Any], str | None]] = []
+        rows_to_process: list[tuple[int, pd.Series, dict[str, Any], str | None]] = []
         for idx, (_, row) in enumerate(df.iterrows()):
             context = prepare_prompt_context(row, include_fields=self.prompt_fields)
             row_id = context.get(checkpoint_field) if checkpoint_field else None
             if checkpoint_manager and row_id and checkpoint_manager.is_processed(str(row_id)):
                 continue
-            if self._early_stop_event and self._early_stop_event.is_set():
+            if self._early_stop_coordinator.is_stopped():
                 break
             rows_to_process.append((idx, row, context, row_id))
 
-        records_with_index: List[tuple[int, Dict[str, Any]]] = []
-        failures: List[Dict[str, Any]] = []
+        records_with_index: list[tuple[int, dict[str, Any]]] = []
+        failures: list[dict[str, Any]] = []
 
-        def handle_success(idx: int, record: Dict[str, Any], row_id: str | None) -> None:
+        def handle_success(idx: int, record: dict[str, Any], row_id: str | None) -> None:
             records_with_index.append((idx, record))
             if checkpoint_manager and row_id:
                 checkpoint_manager.mark_processed(str(row_id))
-            self._maybe_trigger_early_stop(record, row_index=idx)
+            self._early_stop_coordinator.check_record(record, row_index=idx)
 
-        def handle_failure(failure: Dict[str, Any]) -> None:
+        def handle_failure(failure: dict[str, Any]) -> None:
             failures.append(failure)
 
         concurrency_cfg = self.concurrency_config or {}
@@ -124,7 +133,7 @@ class SDARunner:
             )
         else:
             for idx, row, context, row_id in rows_to_process:
-                if self._early_stop_event and self._early_stop_event.is_set():
+                if self._early_stop_coordinator.is_stopped():
                     break
                 record, failure = self._process_single_row(
                     engine,
@@ -194,9 +203,10 @@ class SDARunner:
         self._active_security_level = resolve_security_level(self.security_level, df_security_level)
         metadata["security_level"] = self._active_security_level
 
-        if self._early_stop_reason:
-            metadata["early_stop"] = dict(self._early_stop_reason)
-            payload["early_stop"] = dict(self._early_stop_reason)
+        reason = self._early_stop_coordinator.get_reason()
+        if reason:
+            metadata["early_stop"] = reason
+            payload["early_stop"] = reason
 
         payload["metadata"] = metadata
 
@@ -205,96 +215,23 @@ class SDARunner:
         self._active_security_level = None
         return payload
 
-    def _init_halt_conditions(self) -> None:
-        self._early_stop_reason = None
-        plugins: List[HaltConditionPlugin] = []
-
-        if self.halt_condition_plugins:
-            plugins = list(self.halt_condition_plugins)
-        elif self.halt_condition_config:
-            definition = {"name": "threshold", "options": dict(self.halt_condition_config)}
-            plugin = create_halt_condition_plugin(definition)
-            plugins = [plugin]
-
-        if plugins:
-            for plugin in plugins:
-                try:
-                    plugin.reset()
-                except AttributeError:
-                    pass
-            self._active_halt_condition_plugins = plugins
-            self._early_stop_event = threading.Event()
-            self._early_stop_lock = threading.Lock()
-        else:
-            self._active_halt_condition_plugins = []
-            self._early_stop_event = None
-            self._early_stop_lock = None
-
-    def _maybe_trigger_early_stop(self, record: Dict[str, Any], *, row_index: int | None = None) -> None:
-        event: threading.Event | None = getattr(self, "_early_stop_event", None)
-        if not event or event.is_set():
-            return
-        plugins: List[HaltConditionPlugin] = getattr(self, "_active_halt_condition_plugins", []) or []
-        if not plugins or getattr(self, "_early_stop_reason", None):
-            return
-
-        metadata: Dict[str, Any] | None = None
-        if row_index is not None:
-            metadata = {"row_index": row_index}
-
-        def _evaluate() -> None:
-            if event.is_set() or getattr(self, "_early_stop_reason", None):
-                return
-            for plugin in plugins:
-                try:
-                    reason = plugin.check(record, metadata=metadata)
-                except Exception:  # pragma: no cover - defensive guard
-                    logger.exception(
-                        "Early-stop plugin '%s' raised an unexpected error; continuing",
-                        getattr(plugin, "name", "unknown"),
-                    )
-                    continue
-                if not reason:
-                    continue
-                reason = dict(reason)
-                reason.setdefault("plugin", getattr(plugin, "name", "unknown"))
-                if metadata:
-                    for key, value in metadata.items():
-                        reason.setdefault(key, value)
-                self._early_stop_reason = reason
-                event.set()
-                logger.info(
-                    "Early stop triggered by plugin '%s' (reason: %s)",
-                    reason.get("plugin", getattr(plugin, "name", "unknown")),
-                    {k: v for k, v in reason.items() if k != "plugin"},
-                )
-                break
-
-        lock: threading.Lock | None = getattr(self, "_early_stop_lock", None)
-        if lock:
-            with lock:
-                _evaluate()
-        else:
-            _evaluate()
-
-
     def _process_single_row(
         self,
         engine: PromptEngine,
         system_template: PromptTemplate,
         user_template: PromptTemplate,
-        criteria_templates: Dict[str, PromptTemplate],
-        transform_plugins: List[TransformPlugin],
-        context: Dict[str, Any],
+        criteria_templates: dict[str, PromptTemplate],
+        transform_plugins: list[TransformPlugin],
+        context: dict[str, Any],
         row: pd.Series,
         row_id: str | None,
-    ) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
-        if self._early_stop_event and self._early_stop_event.is_set():
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        if self._early_stop_coordinator.is_stopped():
             return None, None
         try:
             rendered_system_prompt = engine.render(system_template, context)
             if self.criteria:
-                responses: Dict[str, Dict[str, Any]] = {}
+                responses: dict[str, dict[str, Any]] = {}
                 for crit in self.criteria:
                     crit_name = crit.get("name") or crit.get("template", "criteria")
                     prompt_template = criteria_templates[crit_name]
@@ -306,7 +243,7 @@ class SDARunner:
                     )
                     responses[crit_name] = response
                 first_response = next(iter(responses.values())) if responses else {}
-                record: Dict[str, Any] = {"row": context, "response": first_response, "responses": responses}
+                record: dict[str, Any] = {"row": context, "response": first_response, "responses": responses}
                 for resp in responses.values():
                     metrics = resp.get("metrics")
                     if metrics:
@@ -355,7 +292,7 @@ class SDARunner:
                 }
             return None, failure
 
-    def _should_run_parallel(self, config: Dict[str, Any], backlog_size: int) -> bool:
+    def _should_run_parallel(self, config: dict[str, Any], backlog_size: int) -> bool:
         if not config or not config.get("enabled"):
             return False
         max_workers = max(int(config.get("max_workers", 1)), 1)
@@ -366,15 +303,15 @@ class SDARunner:
 
     def _run_parallel(
         self,
-        rows_to_process: List[tuple[int, pd.Series, Dict[str, Any], str | None]],
+        rows_to_process: list[tuple[int, pd.Series, dict[str, Any], str | None]],
         engine: PromptEngine,
         system_template: PromptTemplate,
         user_template: PromptTemplate,
-        criteria_templates: Dict[str, PromptTemplate],
-        transform_plugins: List[TransformPlugin],
+        criteria_templates: dict[str, PromptTemplate],
+        transform_plugins: list[TransformPlugin],
         handle_success,
         handle_failure,
-        config: Dict[str, Any],
+        config: dict[str, Any],
     ) -> None:
         max_workers = max(int(config.get("max_workers", 4)), 1)
         pause_threshold = float(config.get("utilization_pause", 0.8))
@@ -382,8 +319,8 @@ class SDARunner:
 
         lock = threading.Lock()
 
-        def worker(data: tuple[int, pd.Series, Dict[str, Any], str | None]) -> None:
-            if self._early_stop_event and self._early_stop_event.is_set():
+        def worker(data: tuple[int, pd.Series, dict[str, Any], str | None]) -> None:
+            if self._early_stop_coordinator.is_stopped():
                 return
             idx, row, context, row_id = data
             record, failure = self._process_single_row(
@@ -410,12 +347,12 @@ class SDARunner:
                         if utilization < pause_threshold:
                             break
                         time.sleep(pause_interval)
-                if self._early_stop_event and self._early_stop_event.is_set():
+                if self._early_stop_coordinator.is_stopped():
                     break
                 executor.submit(worker, data)
 
-    def _build_sink_bindings(self) -> List[SinkBinding]:
-        bindings: List[SinkBinding] = []
+    def _build_sink_bindings(self) -> list[SinkBinding]:
+        bindings: list[SinkBinding] = []
         for index, sink in enumerate(self.sinks):
             artifact_config = getattr(sink, "_dmp_artifact_config", {}) or {}
             plugin = getattr(sink, "_dmp_plugin_name", sink.__class__.__name__)
@@ -436,8 +373,7 @@ class SDARunner:
             )
         return bindings
 
-    def _execute_llm(self, user_prompt: str, metadata: Dict[str, Any], *, system_prompt: str | None = None) -> Dict[str, Any]:
-        attempts = 1
+    def _execute_llm(self, user_prompt: str, metadata: dict[str, Any], *, system_prompt: str | None = None) -> dict[str, Any]:
         delay = 0.0
         max_attempts = 1
         backoff = 0.0
@@ -448,7 +384,7 @@ class SDARunner:
 
         attempt = 0
         last_error: Exception | None = None
-        attempt_history: List[Dict[str, Any]] = []
+        attempt_history: list[dict[str, Any]] = []
         last_request: LLMRequest | None = None
         while attempt < max_attempts:
             attempt += 1
@@ -525,16 +461,16 @@ class SDARunner:
 
         assert last_error is not None
         if last_request is not None:
-            setattr(last_error, "_dmp_retry_history", attempt_history)
-            setattr(last_error, "_dmp_retry_attempts", attempt)
-            setattr(last_error, "_dmp_retry_max_attempts", max_attempts)
+            last_error._dmp_retry_history = attempt_history
+            last_error._dmp_retry_attempts = attempt
+            last_error._dmp_retry_max_attempts = max_attempts
             try:
                 self._notify_retry_exhausted(last_request, last_error, attempt_history)
             except Exception:  # pragma: no cover - defensive logging
                 logger.debug("Retry exhausted hook raised", exc_info=True)
         raise last_error
 
-    def _notify_retry_exhausted(self, request: LLMRequest, error: Exception, history: List[Dict[str, Any]]) -> None:
+    def _notify_retry_exhausted(self, request: LLMRequest, error: Exception, history: list[dict[str, Any]]) -> None:
         metadata = {
             "experiment": self.cycle_name,
             "attempts": getattr(error, "_dmp_retry_attempts", len(history)),

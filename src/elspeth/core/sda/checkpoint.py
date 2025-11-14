@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Set
 
 
 class CheckpointManager:
@@ -14,20 +13,20 @@ class CheckpointManager:
         Initialize checkpoint manager.
 
         Args:
-            checkpoint_path: Path to checkpoint JSONL file
-            field: Field name containing unique row ID
+            checkpoint_path: Path to checkpoint file (plain text, one ID per line)
+            field: Field name containing unique row ID (currently unused, reserved for future use)
         """
         self.checkpoint_path = Path(checkpoint_path)
-        self.field = field
-        self._processed_ids: Set[str] = self._load_checkpoint()
+        self.field = field  # Reserved for future use (e.g., validating field exists in data)
+        self._processed_ids: set[str] = self._load_checkpoint()
 
-    def _load_checkpoint(self) -> Set[str]:
+    def _load_checkpoint(self) -> set[str]:
         """Load processed IDs from checkpoint file."""
         if not self.checkpoint_path.exists():
             return set()
 
         processed_ids = set()
-        with open(self.checkpoint_path, "r") as f:
+        with self.checkpoint_path.open(encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -47,5 +46,5 @@ class CheckpointManager:
         self._processed_ids.add(row_id)
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(self.checkpoint_path, "a") as f:
+        with self.checkpoint_path.open("a", encoding="utf-8") as f:
             f.write(f"{row_id}\n")

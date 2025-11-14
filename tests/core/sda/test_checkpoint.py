@@ -1,7 +1,5 @@
 """Tests for CheckpointManager."""
 
-from pathlib import Path
-import pytest
 
 from elspeth.core.sda.checkpoint import CheckpointManager
 
@@ -11,7 +9,7 @@ def test_checkpoint_manager_loads_existing_ids(tmp_path):
     checkpoint_path = tmp_path / "checkpoint.txt"
 
     # Create checkpoint with 2 IDs (plain text format)
-    with open(checkpoint_path, "w") as f:
+    with checkpoint_path.open("w", encoding="utf-8") as f:
         f.write('row1\n')
         f.write('row2\n')
 
